@@ -4,6 +4,9 @@ import { formatDiscord, sendDiscord } from '../src/notify/discord.js';
 import { formatSlack, sendSlack } from '../src/notify/slack.js';
 import { dispatch } from '../src/notify/index.js';
 
+/** dispatch は既定で console に書くため、全テストで差し替えてテスト出力を汚さない。 */
+const silentLogger = { log() {}, warn() {}, error() {} };
+
 const downEvent = (over = {}) => ({
   type: 'down', key: 'n1::api-https', node: 'n1', target: 'api-https',
   reason: 'health-down', detail: '/node/health が異常です', hint: null,
@@ -124,6 +127,7 @@ test('dispatch: 設定された両方のチャンネルに送る', async () => {
     discordUrl: 'https://discord.test/hook',
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 2 });
   assert.deepEqual(urls.sort(), ['https://discord.test/hook', 'https://slack.test/hook']);
@@ -134,6 +138,7 @@ test('dispatch: 片方だけ設定されていればそちらにのみ送る', a
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 1 });
   assert.deepEqual(urls, ['https://discord.test/hook']);
@@ -145,7 +150,7 @@ test('dispatch: 片方が失敗してももう片方が成功すれば delivered
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) =>
       url.includes('discord') ? { ok: false, status: 500, text: async () => 'x' } : okResponse,
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 1 });
 });
@@ -154,7 +159,7 @@ test('dispatch: 全て失敗すれば delivered は 0', async () => {
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'x' }),
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 0 });
 });
