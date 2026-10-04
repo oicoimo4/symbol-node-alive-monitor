@@ -481,16 +481,36 @@ test('target の欠けたフィールドは初期値で補われる', () => {
   });
 });
 
-test('readState は存在しないファイルに対して初期状態を返す', async () => {
+/** 警告を捕捉するロガー。テスト出力を汚さないために使う。 */
+const captureLogger = () => {
+  const warnings = [];
+  return { warnings, warn: (message) => warnings.push(message) };
+};
+
+test('readState は存在しないファイルに対して初期状態を返し、警告を出さない', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
-  assert.deepEqual(await readState(join(dir, 'missing.json')), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(join(dir, 'missing.json'), { logger }), createInitialState());
+  assert.deepEqual(logger.warnings, []);
 });
 
-test('readState は壊れた JSON に対して初期状態を返す', async () => {
+test('readState は壊れた JSON に対して初期状態を返し、警告を出す', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
   const path = join(dir, 'broken.json');
   await writeFile(path, 'not json at all', 'utf8');
-  assert.deepEqual(await readState(path), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(path, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /解析/);
+});
+
+test('readState は ENOENT 以外の読み込みエラーで警告を出す', async () => {
+  // ディレクトリを読もうとすると EISDIR になる
+  const dir = await mkdtemp(join(tmpdir(), 'alive-'));
+  const logger = captureLogger();
+  assert.deepEqual(await readState(dir, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /読み込み/);
 });
 
 test('writeState で書いたものを readState で読み戻せる', async () => {
@@ -561,10 +581,24 @@ export function normalizeState(raw) {
   };
 }
 
-export async function readState(path) {
+export async function readState(path, { logger = console } = {}) {
+  let text;
   try {
-    return normalizeState(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
+    text = await readFile(path, 'utf8');
+  } catch (err) {
+    // ファイルが無いのは「初回実行」なので正常系。それ以外の読み込み失敗を黙って
+    // 初期状態に落とすと、通知の重複や週次カウンタの消失として後から現れるため、
+    // 必ず警告を残して原因を追えるようにする。
+    if (err.code !== 'ENOENT') {
+      logger.warn(`state の読み込みに失敗したため初期状態から開始します (${path}): ${err.message}`);
+    }
+    return createInitialState();
+  }
+
+  try {
+    return normalizeState(JSON.parse(text));
+  } catch (err) {
+    logger.warn(`state の解析に失敗したため初期状態から開始します (${path}): ${err.message}`);
     return createInitialState();
   }
 }
@@ -577,7 +611,7 @@ export async function writeState(path, state) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（Task 1 の13件 + 10件 = 23件）
+Expected: PASS（Task 1 の13件 + 11件 = 24件）
 
 - [ ] **Step 5: コミット**
 
@@ -962,7 +996,7 @@ function buildSummaryEvent(targets, results, occurredAt) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 39件）
+Expected: PASS（累計 40件）
 
 - [ ] **Step 5: コミット**
 
@@ -1107,7 +1141,7 @@ export async function withRetry(probe, options = {}) {
 - [ ] **Step 4: 再試行のテストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 47件）
+Expected: PASS（累計 48件）
 
 - [ ] **Step 5: API 検査の失敗するテストを書く**
 
@@ -1345,7 +1379,7 @@ function fail(reason, detail) {
 - [ ] **Step 8: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 60件）
+Expected: PASS（累計 61件）
 
 - [ ] **Step 9: コミット**
 
@@ -1537,7 +1571,7 @@ function fail(detail) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 68件）
+Expected: PASS（累計 69件）
 
 - [ ] **Step 5: コミット**
 
@@ -1920,7 +1954,7 @@ export async function dispatch(events, options = {}) {
 - [ ] **Step 7: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 86件）
+Expected: PASS（累計 87件）
 
 - [ ] **Step 8: コミット**
 
@@ -2169,7 +2203,7 @@ if (invokedDirectly) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 95件）
+Expected: PASS（累計 96件）
 
 - [ ] **Step 5: コミット**
 
@@ -2380,7 +2414,7 @@ DISCORD_WEBHOOK_URL=... node src/index.js   # 実際に 1 回検査する
 - [ ] **Step 3: テストが全て通ることを最終確認する**
 
 Run: `npm test`
-Expected: PASS（95件、失敗 0件）
+Expected: PASS（96件、失敗 0件）
 
 - [ ] **Step 4: 実際に 1 回動かして確認する**
 
@@ -2400,7 +2434,7 @@ git commit -m "feat: GitHub Actions ワークフローと README を追加"
 
 ## 完了条件
 
-- [ ] `npm test` が 95 件すべて通る
+- [ ] `npm test` が 96 件すべて通る
 - [ ] `node src/index.js` がローカルで実在ノードに対して完走する
 - [ ] GitHub に Public リポジトリとして push されている
 - [ ] Secrets に Webhook URL が登録されている
