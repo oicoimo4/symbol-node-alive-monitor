@@ -1,15 +1,15 @@
 {
   "nodes": [
     {
-      "name": "symbol-harvestasya",
-      "host": "symbol.harvestasya.com",
+      "name": "opening-line-01",
+      "host": "sym-main-01.opening-line.jp",
       "api": { "http": 3000, "https": 3001 },
       "peer": { "port": 7900 }
     },
     {
-      "name": "sym-main-01-opening-line",
-      "host": "sym-main-01.opening-line.jp",
-      "api": { "http": 3000, "https": 3001 },
+      "name": "xymtokyo",
+      "host": "xymtokyo.harvest-node.net",
+      "api": { "https": 3001 },
       "peer": { "port": 7900 }
     }
   ]
