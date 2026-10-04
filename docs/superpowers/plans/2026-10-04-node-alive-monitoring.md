@@ -18,6 +18,7 @@
 - **ESM のみ。** `package.json` に `"type": "module"`。`require` は使わない。
 - **Node.js 20 以上を前提にする。** `AbortSignal.timeout()`、`structuredClone()`、`node --test` を使用する。
 - **コメント・エラーメッセージ・通知文はすべて日本語で書く。** 変数名と関数名は英語。
+- **テストの起動は引数なしの `node --test` を使う。** ディレクトリを引数に渡す形（`node --test test/`）は Node 26 系で引数がエントリスクリプトとして誤解釈され、コードが正しくても失敗する。引数なしなら Node 20（CI）と Node 26（手元）の両方で動く。
 - **テストはネットワークにも実ファイルシステムにもアクセスしない。** `fetch` と `net.connect` は必ず引数で注入してモックする。ファイル I/O を伴うテストは `node:os` の `tmpdir()` 配下のみを使う。
 - **定数は以下の値を使う**（マジックナンバーを散らさず、定義元から import する）:
   - `FAILURE_THRESHOLD = 2`（この回数の連続失敗で DOWN 通知）
@@ -152,7 +153,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   }
 }
 ```
