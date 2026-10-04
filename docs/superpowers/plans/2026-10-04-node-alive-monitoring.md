@@ -703,6 +703,18 @@ test('2回連続の失敗で down イベントが1回だけ発火する', () => 
   assert.equal(second.nextState.targets['n1::api-https'].incidentsThisWeek, 1);
 });
 
+test('障害が続く間 downSince は最初の失敗時刻に固定される', () => {
+  // 2回の実行で別々の now を渡すこと。同じ now だと
+  // downSince: occurredAt に退化しても気づけない。
+  const LATER = new Date('2026-10-04T13:10:00.000Z');
+  const first = evaluate({ prevState: stateWith(), results: [ng()], now: NOW });
+  const second = evaluate({ prevState: first.nextState, results: [ng()], now: LATER });
+
+  assert.equal(second.nextState.targets['n1::api-https'].downSince, NOW_ISO);
+  assert.equal(eventsOfType(second.events, 'down')[0].downSince, NOW_ISO);
+  assert.equal(second.nextState.updatedAt, LATER.toISOString());
+});
+
 test('3回目以降の失敗では何も発火しない', () => {
   let state = stateWith();
   for (let i = 0; i < 2; i += 1) {
@@ -747,7 +759,9 @@ test('失敗時に lastHeight は更新されない', () => {
   const prev = { ...INITIAL_TARGET_STATE, lastHeight: '150', lastOkAt: '2026-10-04T12:00:00.000Z' };
   const { nextState } = evaluate({
     prevState: stateWith({ 'n1::api-https': prev }),
-    results: [ng({ reason: 'chain-stalled', height: '150' })],
+    // 失敗した検査が返した height は前回値と必ず違う値にする。
+    // 同じ値にすると lastHeight: result.height ?? prev.lastHeight に退化しても通ってしまう。
+    results: [ng({ reason: 'chain-stalled', height: '999' })],
     now: NOW,
   });
   assert.equal(nextState.targets['n1::api-https'].lastHeight, '150');
@@ -996,7 +1010,7 @@ function buildSummaryEvent(targets, results, occurredAt) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 40件）
+Expected: PASS（累計 41件）
 
 - [ ] **Step 5: コミット**
 
@@ -1141,7 +1155,7 @@ export async function withRetry(probe, options = {}) {
 - [ ] **Step 4: 再試行のテストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 48件）
+Expected: PASS（累計 49件）
 
 - [ ] **Step 5: API 検査の失敗するテストを書く**
 
@@ -1379,7 +1393,7 @@ function fail(reason, detail) {
 - [ ] **Step 8: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 61件）
+Expected: PASS（累計 62件）
 
 - [ ] **Step 9: コミット**
 
@@ -1571,7 +1585,7 @@ function fail(detail) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 69件）
+Expected: PASS（累計 70件）
 
 - [ ] **Step 5: コミット**
 
@@ -1954,7 +1968,7 @@ export async function dispatch(events, options = {}) {
 - [ ] **Step 7: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 87件）
+Expected: PASS（累計 88件）
 
 - [ ] **Step 8: コミット**
 
@@ -2203,7 +2217,7 @@ if (invokedDirectly) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 96件）
+Expected: PASS（累計 97件）
 
 - [ ] **Step 5: コミット**
 
@@ -2414,7 +2428,7 @@ DISCORD_WEBHOOK_URL=... node src/index.js   # 実際に 1 回検査する
 - [ ] **Step 3: テストが全て通ることを最終確認する**
 
 Run: `npm test`
-Expected: PASS（96件、失敗 0件）
+Expected: PASS（97件、失敗 0件）
 
 - [ ] **Step 4: 実際に 1 回動かして確認する**
 
@@ -2434,7 +2448,7 @@ git commit -m "feat: GitHub Actions ワークフローと README を追加"
 
 ## 完了条件
 
-- [ ] `npm test` が 96 件すべて通る
+- [ ] `npm test` が 97 件すべて通る
 - [ ] `node src/index.js` がローカルで実在ノードに対して完走する
 - [ ] GitHub に Public リポジトリとして push されている
 - [ ] Secrets に Webhook URL が登録されている
