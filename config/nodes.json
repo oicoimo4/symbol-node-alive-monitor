@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {
+      "name": "my-node-01",
+      "host": "node1.example.com",
+      "api": { "http": 3000, "https": 3001 },
+      "peer": { "port": 7900 }
+    },
+    {
+      "name": "peer-only-node",
+      "host": "node2.example.com",
+      "peer": { "port": 7900 }
+    }
+  ]
+}
