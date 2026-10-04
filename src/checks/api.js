@@ -43,11 +43,15 @@ async function probeApi(target, lastHeight, fetchImpl, timeoutMs) {
     );
   }
 
-  if (lastHeight !== null && BigInt(height) <= BigInt(lastHeight)) {
+  // lastHeight は state.json 由来で検証されていない。BigInt() は 'abc' で例外を投げ、
+  // '0x10' や true は黙って別の数値に化けて比較結果を狂わせる。
+  // 10進数字列でなければ「前回値なし」として進行チェックを省く。
+  const previous = /^\d+$/.test(String(lastHeight)) ? lastHeight : null;
+  if (previous !== null && BigInt(height) <= BigInt(previous)) {
     return {
       ok: false,
       reason: 'chain-stalled',
-      detail: `チェーン高が進んでいません (前回 ${lastHeight} → 今回 ${height})`,
+      detail: `チェーン高が進んでいません (前回 ${previous} → 今回 ${height})`,
       height,
     };
   }

@@ -89,6 +89,12 @@ test('Discord: JSON を POST する', async () => {
   assert.ok(JSON.parse(captured.init.body).embeds);
 });
 
+test('長すぎる detail は切り詰められる', () => {
+  const [body] = formatDiscord([downEvent({ detail: 'あ'.repeat(5000) })]);
+  assert.ok(body.embeds[0].description.length <= 3950);
+  assert.match(body.embeds[0].description, /…\(省略\)$/);
+});
+
 // --- Slack ---
 
 test('Slack: down は赤の attachment になる', () => {

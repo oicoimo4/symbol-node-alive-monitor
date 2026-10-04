@@ -179,6 +179,15 @@ test('7日経過でサマリが発火し incidentsThisWeek がリセットされ
   assert.equal(nextState.lastWeeklySummaryAt, NOW_ISO);
 });
 
+test('lastWeeklySummaryAt が解釈できない値ならサマリを送る', () => {
+  for (const bad of ['garbage', '2026-13-45', '']) {
+    const prev = { version: 1, updatedAt: null, lastWeeklySummaryAt: bad, targets: {} };
+    const { nextState, events } = evaluate({ prevState: prev, results: [ok()], now: NOW });
+    assert.equal(eventsOfType(events, 'summary').length, 1, `bad value: ${JSON.stringify(bad)}`);
+    assert.equal(nextState.lastWeeklySummaryAt, NOW_ISO);
+  }
+});
+
 test('7日未満ではサマリが発火しない', () => {
   const prev = {
     version: 1, updatedAt: null,

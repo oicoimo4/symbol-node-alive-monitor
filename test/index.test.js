@@ -131,6 +131,32 @@ test('通知が1件でも届けば 0 を返し state を書く', async () => {
   assert.equal(written[0].lastWeeklySummaryAt, '2026-10-04T13:00:00.000Z');
 });
 
+test('障害が通知され state に notified が残る', async () => {
+  const down = {
+    status: 'up', consecutiveFailures: 1, lastHeight: '150',
+    lastOkAt: '2026-10-04T12:00:00.000Z', downSince: '2026-10-04T12:50:00.000Z',
+    notified: false, incidentsThisWeek: 0,
+  };
+  let sent = null;
+  const { written, overrides } = deps({
+    readState: async () => ({ ...emptyState(), targets: { 'n1::api-https': down } }),
+    checkApi: async (target) => ({
+      key: target.key, node: target.node, label: target.label,
+      ok: false, reason: 'health-down', detail: '/node/health が異常です', height: null,
+    }),
+    dispatch: async (events) => { sent = events; return { channels: 1, delivered: 1 }; },
+  });
+
+  assert.equal(await main(overrides), 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, 'down');
+  assert.equal(sent[0].key, 'n1::api-https');
+  assert.equal(sent[0].downSince, '2026-10-04T12:50:00.000Z');
+  assert.equal(written.length, 1);
+  assert.equal(written[0].targets['n1::api-https'].notified, true);
+  assert.equal(written[0].targets['n1::api-https'].status, 'down');
+});
+
 test('イベントが無ければ dispatch を呼ばずに state を書く', async () => {
   let called = false;
   const { written, overrides } = deps({

@@ -67,9 +67,12 @@ export function evaluate({ prevState, results, now }) {
   annotateTlsHint(events, results);
 
   let lastWeeklySummaryAt = prevState.lastWeeklySummaryAt ?? null;
+  // 解釈できない値は「期限切れ」として扱い、送る側に倒す。
+  // 週次サマリは監視自体の生存信号なので、判断がつかないときに黙るのが最悪の選択になる。
+  // NaN >= WEEK_MS は常に false で、壊れた値が自己保存されサマリが永久に止まる。
+  const parsedSummaryAt = lastWeeklySummaryAt === null ? NaN : Date.parse(lastWeeklySummaryAt);
   const summaryDue =
-    lastWeeklySummaryAt === null ||
-    now.getTime() - Date.parse(lastWeeklySummaryAt) >= WEEK_MS;
+    !Number.isFinite(parsedSummaryAt) || now.getTime() - parsedSummaryAt >= WEEK_MS;
 
   if (summaryDue) {
     events.push(buildSummaryEvent(targets, results, occurredAt));

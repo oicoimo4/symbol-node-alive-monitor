@@ -13,7 +13,7 @@ export function describeEvent(event) {
   if (event.hint) lines.push('', event.hint);
   if (event.downSince) lines.push('', `障害開始: ${event.downSince}`);
   lines.push(`確認時刻: ${event.occurredAt}`);
-  return lines.join('\n');
+  return truncate(lines.join('\n'), 3900);
 }
 
 function describeSummary(event) {

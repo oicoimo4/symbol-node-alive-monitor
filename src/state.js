@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, writeFile } from 'node:fs/promises';
 
 export const CURRENT_VERSION = 1;
 
@@ -66,5 +66,9 @@ export async function readState(path, { logger = console } = {}) {
 }
 
 export async function writeState(path, state) {
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  // 書き込み途中でジョブが落ちると、workflow の if: always() が壊れた JSON を
+  // force push してしまう。一時ファイルに書いてから rename で差し替える。
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  await rename(tmp, path);
 }

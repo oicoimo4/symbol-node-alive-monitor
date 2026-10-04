@@ -73,6 +73,14 @@ test('height は文字列比較ではなく数値として比較される', asyn
   assert.equal(result.ok, true);
 });
 
+test('lastHeight が十進数字列でなければ進行チェックをスキップする', async () => {
+  for (const bad of ['abc', '0x10', '12.5', true, {}]) {
+    const { impl } = mockFetch(healthyRoutes('100'));
+    const result = await checkApi(TARGET, { lastHeight: bad, fetchImpl: impl, sleep: noSleep });
+    assert.equal(result.ok, true, `bad lastHeight: ${JSON.stringify(bad)}`);
+  }
+});
+
 test('apiNode が down なら health-down になる', async () => {
   const { impl } = mockFetch({
     [HEALTH_URL]: jsonResponse(503, { status: { apiNode: 'down', db: 'up' } }),
