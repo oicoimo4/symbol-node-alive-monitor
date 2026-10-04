@@ -43,10 +43,24 @@ export function normalizeState(raw) {
   };
 }
 
-export async function readState(path) {
+export async function readState(path, { logger = console } = {}) {
+  let text;
   try {
-    return normalizeState(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
+    text = await readFile(path, 'utf8');
+  } catch (err) {
+    // ファイルが無いのは「初回実行」なので正常系。それ以外の読み込み失敗を黙って
+    // 初期状態に落とすと、通知の重複や週次カウンタの消失として後から現れるため、
+    // 必ず警告を残して原因を追えるようにする。
+    if (err.code !== 'ENOENT') {
+      logger.warn(`state の読み込みに失敗したため初期状態から開始します (${path}): ${err.message}`);
+    }
+    return createInitialState();
+  }
+
+  try {
+    return normalizeState(JSON.parse(text));
+  } catch (err) {
+    logger.warn(`state の解析に失敗したため初期状態から開始します (${path}): ${err.message}`);
     return createInitialState();
   }
 }

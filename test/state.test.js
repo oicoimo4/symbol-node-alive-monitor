@@ -68,16 +68,36 @@ test('target の欠けたフィールドは初期値で補われる', () => {
   });
 });
 
-test('readState は存在しないファイルに対して初期状態を返す', async () => {
+/** 警告を捕捉するロガー。テスト出力を汚さないために使う。 */
+const captureLogger = () => {
+  const warnings = [];
+  return { warnings, warn: (message) => warnings.push(message) };
+};
+
+test('readState は存在しないファイルに対して初期状態を返し、警告を出さない', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
-  assert.deepEqual(await readState(join(dir, 'missing.json')), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(join(dir, 'missing.json'), { logger }), createInitialState());
+  assert.deepEqual(logger.warnings, []);
 });
 
-test('readState は壊れた JSON に対して初期状態を返す', async () => {
+test('readState は壊れた JSON に対して初期状態を返し、警告を出す', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
   const path = join(dir, 'broken.json');
   await writeFile(path, 'not json at all', 'utf8');
-  assert.deepEqual(await readState(path), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(path, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /解析/);
+});
+
+test('readState は ENOENT 以外の読み込みエラーで警告を出す', async () => {
+  // ディレクトリを読もうとすると EISDIR になる
+  const dir = await mkdtemp(join(tmpdir(), 'alive-'));
+  const logger = captureLogger();
+  assert.deepEqual(await readState(dir, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /読み込み/);
 });
 
 test('writeState で書いたものを readState で読み戻せる', async () => {
