@@ -108,6 +108,29 @@ test('Webhook URL を環境変数から dispatch に渡す', async () => {
   assert.equal(received.slackUrl, 'https://s.test');
 });
 
+test('検査が例外を投げても他の対象を巻き込まず state を書く', async () => {
+  const { written, overrides } = deps({
+    checkApi: async () => { throw new Error('BigInt 変換に失敗'); },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  // 例外を投げた対象は異常として記録される（黙殺しない）
+  assert.equal(written[0].targets['n1::api-https'].consecutiveFailures, 1);
+  // 正常だった対象は巻き込まれない
+  assert.equal(written[0].targets['n1::peer'].status, 'up');
+  assert.equal(written[0].targets['n1::peer'].lastOkAt, '2026-10-04T13:00:00.000Z');
+});
+
+test('通知が1件でも届けば 0 を返し state を書く', async () => {
+  const { written, overrides } = deps({
+    readState: async () => ({ ...emptyState(), lastWeeklySummaryAt: null }),
+    dispatch: async () => ({ channels: 2, delivered: 1 }),
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].lastWeeklySummaryAt, '2026-10-04T13:00:00.000Z');
+});
+
 test('イベントが無ければ dispatch を呼ばずに state を書く', async () => {
   let called = false;
   const { written, overrides } = deps({

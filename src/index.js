@@ -35,14 +35,19 @@ export async function main(overrides = {}) {
     return 1;
   }
 
-  const prevState = await readState(statePath);
+  const prevState = await readState(statePath, { logger });
 
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     targets.map((target) =>
       target.kind === 'api'
         ? checkApi(target, { lastHeight: prevState.targets[target.key]?.lastHeight ?? null })
         : checkPeer(target)),
   );
+
+  // 1件の検査が予期せず例外を投げても、他の対象の結果と state 更新を道連れにしない。
+  // Promise.all だと fail-fast で全滅し、壊れた state が残り続けて監視が永久に死ぬ。
+  const results = settled.map((outcome, index) =>
+    (outcome.status === 'fulfilled' ? outcome.value : crashedResult(targets[index], outcome.reason)));
 
   const { nextState, events } = evaluate({ prevState, results, now: now() });
 
@@ -66,6 +71,23 @@ export async function main(overrides = {}) {
 
   await writeState(statePath, nextState);
   return 0;
+}
+
+/**
+ * 検査そのものが例外で落ちたときの合成結果。
+ * 握りつぶさず異常として扱うので、2回続けば通知が飛び、detail に例外内容が載る。
+ * 監視自体の不具合を無言にしないための判断。
+ */
+function crashedResult(target, error) {
+  return {
+    key: target.key,
+    node: target.node,
+    label: target.label,
+    ok: false,
+    reason: 'bad-response',
+    detail: `検査が例外で失敗しました: ${error?.message ?? error}`,
+    height: null,
+  };
 }
 
 const invokedDirectly =
