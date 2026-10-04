@@ -113,6 +113,7 @@
 | `src/checks/api.js` | API ノードの検査 | 4 |
 | `src/checks/peer.js` | Peer ノードの検査 | 5 |
 | `src/notify/format.js` | 通知先に依存しない文面の生成 | 6 |
+| `src/notify/webhook.js` | Webhook への POST とエラー判定（Discord/Slack 共通） | 6 |
 | `src/notify/discord.js` | Discord 用の整形と送信 | 6 |
 | `src/notify/slack.js` | Slack 用の整形と送信 | 6 |
 | `src/notify/index.js` | 通知のディスパッチ | 6 |
@@ -1600,6 +1601,7 @@ git commit -m "feat: Peer ノードの TCP 疎通検査を追加"
 
 **Files:**
 - Create: `src/notify/format.js`
+- Create: `src/notify/webhook.js`
 - Create: `src/notify/discord.js`
 - Create: `src/notify/slack.js`
 - Create: `src/notify/index.js`
@@ -1609,6 +1611,7 @@ git commit -m "feat: Peer ノードの TCP 疎通検査を追加"
 - Consumes: Event（`src/evaluate.js` が生成）
 - Produces:
   - `titleOf(event: Event): string`, `describeEvent(event: Event): string`（`format.js`。通知先に依存しない文面を作る）
+  - `postWebhook(url: string, bodies: object[], channelName: string, fetchImpl: Function): Promise<void>`（`webhook.js`。2xx 以外なら throw）
   - `formatDiscord(events: Event[]): object[]` — Discord Webhook のリクエストボディ配列（embeds を10件ずつに分割）
   - `sendDiscord(url: string, events: Event[], opts?): Promise<void>` — 失敗時は throw
   - `formatSlack(events: Event[]): object[]` — Slack Webhook のリクエストボディ配列（attachments を20件ずつに分割）
@@ -1628,6 +1631,9 @@ import assert from 'node:assert/strict';
 import { formatDiscord, sendDiscord } from '../src/notify/discord.js';
 import { formatSlack, sendSlack } from '../src/notify/slack.js';
 import { dispatch } from '../src/notify/index.js';
+
+/** dispatch は既定で console に書くため、全テストで差し替えてテスト出力を汚さない。 */
+const silentLogger = { log() {}, warn() {}, error() {} };
 
 const downEvent = (over = {}) => ({
   type: 'down', key: 'n1::api-https', node: 'n1', target: 'api-https',
@@ -1749,6 +1755,7 @@ test('dispatch: 設定された両方のチャンネルに送る', async () => {
     discordUrl: 'https://discord.test/hook',
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 2 });
   assert.deepEqual(urls.sort(), ['https://discord.test/hook', 'https://slack.test/hook']);
@@ -1759,6 +1766,7 @@ test('dispatch: 片方だけ設定されていればそちらにのみ送る', a
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 1 });
   assert.deepEqual(urls, ['https://discord.test/hook']);
@@ -1770,7 +1778,7 @@ test('dispatch: 片方が失敗してももう片方が成功すれば delivered
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) =>
       url.includes('discord') ? { ok: false, status: 500, text: async () => 'x' } : okResponse,
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 1 });
 });
@@ -1779,7 +1787,7 @@ test('dispatch: 全て失敗すれば delivered は 0', async () => {
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'x' }),
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 0 });
 });
@@ -1847,10 +1855,37 @@ function truncate(text, limit) {
 }
 ```
 
-- [ ] **Step 4: `src/notify/discord.js` を実装する**
+- [ ] **Step 4: `src/notify/webhook.js`（Discord/Slack 共通の送信処理）を実装する**
+
+送信ループを 1 箇所に集約する。通知の配送は壊れても誰も気づかない層なので、
+後からタイムアウトやリトライを足すときに 2 箇所を直す形にしてはいけない。
+
+```js
+/**
+ * Webhook へ順番に POST する。2xx 以外が返ったら即座に throw する。
+ * body の組み立て（embeds / attachments の形と1通あたりの上限）は呼び出し側の責務。
+ */
+export async function postWebhook(url, bodies, channelName, fetchImpl) {
+  for (const body of bodies) {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `${channelName} への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`,
+      );
+    }
+  }
+}
+```
+
+- [ ] **Step 5: `src/notify/discord.js` を実装する**
 
 ```js
 import { describeEvent, titleOf } from './format.js';
+import { postWebhook } from './webhook.js';
 
 const COLORS = { down: 0xe01e5a, recovered: 0x2eb67d, summary: 0x1d9bd1 };
 const MAX_EMBEDS_PER_MESSAGE = 10;
@@ -1872,23 +1907,15 @@ export function formatDiscord(events) {
 
 export async function sendDiscord(url, events, options = {}) {
   const { fetchImpl = fetch } = options;
-  for (const body of formatDiscord(events)) {
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Discord への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`);
-    }
-  }
+  await postWebhook(url, formatDiscord(events), 'Discord', fetchImpl);
 }
 ```
 
-- [ ] **Step 5: `src/notify/slack.js` を実装する**
+- [ ] **Step 6: `src/notify/slack.js` を実装する**
 
 ```js
 import { describeEvent, titleOf } from './format.js';
+import { postWebhook } from './webhook.js';
 
 const COLORS = { down: '#e01e5a', recovered: '#2eb67d', summary: '#1d9bd1' };
 const MAX_ATTACHMENTS_PER_MESSAGE = 20;
@@ -1910,20 +1937,11 @@ export function formatSlack(events) {
 
 export async function sendSlack(url, events, options = {}) {
   const { fetchImpl = fetch } = options;
-  for (const body of formatSlack(events)) {
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Slack への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`);
-    }
-  }
+  await postWebhook(url, formatSlack(events), 'Slack', fetchImpl);
 }
 ```
 
-- [ ] **Step 6: `src/notify/index.js` を実装する**
+- [ ] **Step 7: `src/notify/index.js` を実装する**
 
 ```js
 import { sendDiscord } from './discord.js';
@@ -1965,12 +1983,12 @@ export async function dispatch(events, options = {}) {
 }
 ```
 
-- [ ] **Step 7: テストが通ることを確認する**
+- [ ] **Step 8: テストが通ることを確認する**
 
 Run: `npm test`
 Expected: PASS（累計 88件）
 
-- [ ] **Step 8: コミット**
+- [ ] **Step 9: コミット**
 
 ```bash
 git add src/notify/ test/notify.test.js
