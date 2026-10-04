@@ -2130,6 +2130,29 @@ test('Webhook URL を環境変数から dispatch に渡す', async () => {
   assert.equal(received.slackUrl, 'https://s.test');
 });
 
+test('検査が例外を投げても他の対象を巻き込まず state を書く', async () => {
+  const { written, overrides } = deps({
+    checkApi: async () => { throw new Error('BigInt 変換に失敗'); },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  // 例外を投げた対象は異常として記録される（黙殺しない）
+  assert.equal(written[0].targets['n1::api-https'].consecutiveFailures, 1);
+  // 正常だった対象は巻き込まれない
+  assert.equal(written[0].targets['n1::peer'].status, 'up');
+  assert.equal(written[0].targets['n1::peer'].lastOkAt, '2026-10-04T13:00:00.000Z');
+});
+
+test('通知が1件でも届けば 0 を返し state を書く', async () => {
+  const { written, overrides } = deps({
+    readState: async () => ({ ...emptyState(), lastWeeklySummaryAt: null }),
+    dispatch: async () => ({ channels: 2, delivered: 1 }),
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].lastWeeklySummaryAt, '2026-10-04T13:00:00.000Z');
+});
+
 test('イベントが無ければ dispatch を呼ばずに state を書く', async () => {
   let called = false;
   const { written, overrides } = deps({
@@ -2186,14 +2209,19 @@ export async function main(overrides = {}) {
     return 1;
   }
 
-  const prevState = await readState(statePath);
+  const prevState = await readState(statePath, { logger });
 
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     targets.map((target) =>
       target.kind === 'api'
         ? checkApi(target, { lastHeight: prevState.targets[target.key]?.lastHeight ?? null })
         : checkPeer(target)),
   );
+
+  // 1件の検査が予期せず例外を投げても、他の対象の結果と state 更新を道連れにしない。
+  // Promise.all だと fail-fast で全滅し、壊れた state が残り続けて監視が永久に死ぬ。
+  const results = settled.map((outcome, index) =>
+    (outcome.status === 'fulfilled' ? outcome.value : crashedResult(targets[index], outcome.reason)));
 
   const { nextState, events } = evaluate({ prevState, results, now: now() });
 
@@ -2219,6 +2247,23 @@ export async function main(overrides = {}) {
   return 0;
 }
 
+/**
+ * 検査そのものが例外で落ちたときの合成結果。
+ * 握りつぶさず異常として扱うので、2回続けば通知が飛び、detail に例外内容が載る。
+ * 監視自体の不具合を無言にしないための判断。
+ */
+function crashedResult(target, error) {
+  return {
+    key: target.key,
+    node: target.node,
+    label: target.label,
+    ok: false,
+    reason: 'bad-response',
+    detail: `検査が例外で失敗しました: ${error?.message ?? error}`,
+    height: null,
+  };
+}
+
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
@@ -2235,7 +2280,7 @@ if (invokedDirectly) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 97件）
+Expected: PASS（累計 99件）
 
 - [ ] **Step 5: コミット**
 
@@ -2446,7 +2491,7 @@ DISCORD_WEBHOOK_URL=... node src/index.js   # 実際に 1 回検査する
 - [ ] **Step 3: テストが全て通ることを最終確認する**
 
 Run: `npm test`
-Expected: PASS（97件、失敗 0件）
+Expected: PASS（99件、失敗 0件）
 
 - [ ] **Step 4: 実際に 1 回動かして確認する**
 
@@ -2466,7 +2511,7 @@ git commit -m "feat: GitHub Actions ワークフローと README を追加"
 
 ## 完了条件
 
-- [ ] `npm test` が 97 件すべて通る
+- [ ] `npm test` が 99 件すべて通る
 - [ ] `node src/index.js` がローカルで実在ノードに対して完走する
 - [ ] GitHub に Public リポジトリとして push されている
 - [ ] Secrets に Webhook URL が登録されている
