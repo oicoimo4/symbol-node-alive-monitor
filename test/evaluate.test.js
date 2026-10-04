@@ -59,6 +59,18 @@ test('2回連続の失敗で down イベントが1回だけ発火する', () => 
   assert.equal(second.nextState.targets['n1::api-https'].incidentsThisWeek, 1);
 });
 
+test('障害が続く間 downSince は最初の失敗時刻に固定される', () => {
+  // 2回の実行で別々の now を渡すこと。同じ now だと
+  // downSince: occurredAt に退化しても気づけない。
+  const LATER = new Date('2026-10-04T13:10:00.000Z');
+  const first = evaluate({ prevState: stateWith(), results: [ng()], now: NOW });
+  const second = evaluate({ prevState: first.nextState, results: [ng()], now: LATER });
+
+  assert.equal(second.nextState.targets['n1::api-https'].downSince, NOW_ISO);
+  assert.equal(eventsOfType(second.events, 'down')[0].downSince, NOW_ISO);
+  assert.equal(second.nextState.updatedAt, LATER.toISOString());
+});
+
 test('3回目以降の失敗では何も発火しない', () => {
   let state = stateWith();
   for (let i = 0; i < 2; i += 1) {
@@ -103,7 +115,9 @@ test('失敗時に lastHeight は更新されない', () => {
   const prev = { ...INITIAL_TARGET_STATE, lastHeight: '150', lastOkAt: '2026-10-04T12:00:00.000Z' };
   const { nextState } = evaluate({
     prevState: stateWith({ 'n1::api-https': prev }),
-    results: [ng({ reason: 'chain-stalled', height: '150' })],
+    // 失敗した検査が返した height は前回値と必ず違う値にする。
+    // 同じ値にすると lastHeight: result.height ?? prev.lastHeight に退化しても通ってしまう。
+    results: [ng({ reason: 'chain-stalled', height: '999' })],
     now: NOW,
   });
   assert.equal(nextState.targets['n1::api-https'].lastHeight, '150');
