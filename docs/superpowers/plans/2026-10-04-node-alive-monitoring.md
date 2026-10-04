@@ -2338,13 +2338,33 @@ jobs:
 
       - name: Restore state
         # raw.githubusercontent.com は CDN キャッシュで古い値を返すため使わない。
+        #
+        # 「ブランチが無い（初回）」と「一時的に取得できなかった」を必ず区別すること。
+        # 後者を {} にフォールバックさせると、後続の Persist がそれを force push して
+        # notified フラグ・lastHeight・週次カウンタを永久に失う。その結果、進行中の
+        # 障害の復旧通知が飛ばなくなる。区別できないときは state を触らず中断する。
         run: |
-          if git fetch --depth=1 origin monitoring-state 2>/dev/null \
-             && git show FETCH_HEAD:state.json > state.json 2>/dev/null; then
-            echo "既存の state を復元しました"
-          else
+          rc=0
+          git ls-remote --exit-code --heads origin monitoring-state >/dev/null 2>&1 || rc=$?
+
+          if [ "$rc" -eq 0 ]; then
+            # ブランチは存在する。ここから先の失敗は一時障害なので握りつぶさない
+            # （fetch が落ちればこのステップが非ゼロ終了し、state.json が無いまま
+            #   Persist は test -f で何もせず、state ブランチは元のまま残る）。
+            git fetch --depth=1 origin monitoring-state
+            if git show FETCH_HEAD:state.json > state.json 2>/dev/null; then
+              echo "既存の state を復元しました"
+            else
+              echo '{}' > state.json
+              echo "state ブランチに state.json が無いため初期状態から開始します"
+            fi
+          elif [ "$rc" -eq 2 ]; then
+            # --exit-code の 2 は「該当する ref が無い」= 正真正銘の初回実行
             echo '{}' > state.json
-            echo "既存の state がないため初期状態から開始します"
+            echo "state ブランチが存在しないため初期状態から開始します"
+          else
+            echo "::error::state ブランチの存在確認に失敗しました (git ls-remote exit=$rc)。state を失わないため中断します。"
+            exit 1
           fi
 
       - name: Run checks
@@ -2358,6 +2378,9 @@ jobs:
         # この push が「リポジトリ活動」となり、Public リポジトリの
         # scheduled workflow が 60 日で自動停止する仕様を回避する。
         if: always()
+        env:
+          # 式展開でスクリプト本文に直接埋め込まず、環境変数経由で渡す
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           test -f state.json || exit 0
           tmp="$(mktemp -d)"
@@ -2369,7 +2392,7 @@ jobs:
               -c user.email='actions@users.noreply.github.com' \
               commit -q -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push -q --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
             HEAD:monitoring-state
 ```
 
@@ -2387,13 +2410,18 @@ Symbol の API ノード / Peer ノードを GitHub Actions だけで死活監�
 実行間の状態（前回のチェーン高、連続失敗回数、通知済みフラグ）は
 `monitoring-state` ブランチの `state.json` に force push して引き継ぐ。
 
+> **この force push を「変更があったときだけ」に最適化してはいけない。**
+> GitHub は Public リポジトリの scheduled workflow を、リポジトリ活動が 60 日間
+> 途切れると自動で無効化する。毎回の push がその活動そのものであり、条件付きに
+> した瞬間、監視は 2 か月後に自分で止まる。しかも止まったことは通知されない。
+
 ## 監視内容
 
 | 対象 | 確認すること |
 |---|---|
 | API (http / https) | `/node/health` が `apiNode` と `db` の両方で `up` を返すか |
 | API (http / https) | `/chain/info` の `height` が前回より進んでいるか |
-| Peer | 7900 番への TCP 接続が確立するか |
+| Peer | Peer ポート（既定 7900、`peer.port` で変更可）への TCP 接続が確立するか |
 
 2 回連続で失敗したときに初めて通知する（瞬断による誤報を防ぐため、実質 20 分継続した障害が対象）。
 障害が続いている間は再通知しない。復旧したら復旧通知を送る。
@@ -2456,6 +2484,11 @@ Webhook URL は Secrets に入れるため漏れない。
 
 Actions タブ → `node-alive-monitor` → Run workflow で手動実行する。
 初回実行では必ずサマリ通知が送られるので、Discord / Slack に届くことを確認する。
+
+手動実行を 30 秒以内に連続で行うと、Symbol のブロック間隔（約 30 秒）より短い間隔で
+チェーン高を見ることになり、`chain-stalled` として「異常 N 件」と表示されることがある。
+これは正常な挙動で、通知には至らない（通知には 2 回連続の失敗が必要）。
+確認のために 2 回続けて回すときは 1 分ほど空けるとよい。
 
 ## 通知の種類
 
