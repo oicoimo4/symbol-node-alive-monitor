@@ -1,14 +1,15 @@
 {
   "nodes": [
     {
-      "name": "my-node-01",
-      "host": "node1.example.com",
+      "name": "symbol-harvestasya",
+      "host": "symbol.harvestasya.com",
       "api": { "http": 3000, "https": 3001 },
       "peer": { "port": 7900 }
     },
     {
-      "name": "peer-only-node",
-      "host": "node2.example.com",
+      "name": "sym-main-01-opening-line",
+      "host": "sym-main-01.opening-line.jp",
+      "api": { "http": 3000, "https": 3001 },
       "peer": { "port": 7900 }
     }
   ]
