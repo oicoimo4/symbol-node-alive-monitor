@@ -62,6 +62,52 @@ test('前回の lastHeight が checkApi に渡される', async () => {
   assert.equal(passed, '150');
 });
 
+/** lastOkAt だけ差し替えた、正常な api ターゲットの state を作る。 */
+const okStateAt = (lastOkAt) => ({
+  status: 'up', consecutiveFailures: 0, lastHeight: '150',
+  lastOkAt, downSince: null, notified: false, incidentsThisWeek: 0,
+});
+
+test('前回の正常取得から間がない場合はチェーン高の判定を見送る', async () => {
+  let passed = 'UNSET';
+  const { overrides } = deps({
+    // now は 13:00:00。その 30 秒前 = 最小間隔 90 秒に満たない
+    readState: async () => ({ ...emptyState(), targets: { 'n1::api-https': okStateAt('2026-10-04T12:59:30.000Z') } }),
+    checkApi: async (target, opts) => {
+      passed = opts.lastHeight;
+      return { key: target.key, node: target.node, label: target.label, ok: true, reason: null, detail: 'ok', height: '200' };
+    },
+  });
+  await main(overrides);
+  assert.equal(passed, null);
+});
+
+test('前回の正常取得から十分経っていればチェーン高を判定する', async () => {
+  let passed = 'UNSET';
+  const { overrides } = deps({
+    readState: async () => ({ ...emptyState(), targets: { 'n1::api-https': okStateAt('2026-10-04T12:55:00.000Z') } }),
+    checkApi: async (target, opts) => {
+      passed = opts.lastHeight;
+      return { key: target.key, node: target.node, label: target.label, ok: true, reason: null, detail: 'ok', height: '200' };
+    },
+  });
+  await main(overrides);
+  assert.equal(passed, '150');
+});
+
+test('lastOkAt が壊れている場合はチェーン高の判定を見送る', async () => {
+  let passed = 'UNSET';
+  const { overrides } = deps({
+    readState: async () => ({ ...emptyState(), targets: { 'n1::api-https': okStateAt('garbage') } }),
+    checkApi: async (target, opts) => {
+      passed = opts.lastHeight;
+      return { key: target.key, node: target.node, label: target.label, ok: true, reason: null, detail: 'ok', height: '200' };
+    },
+  });
+  await main(overrides);
+  assert.equal(passed, null);
+});
+
 test('ノードが落ちていても終了コードは 0', async () => {
   const { overrides } = deps({
     checkApi: async (target) => ({ key: target.key, node: target.node, label: target.label, ok: false, reason: 'unreachable', detail: 'ng', height: null }),

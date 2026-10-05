@@ -5,7 +5,7 @@ on:
     # GitHub Actions の cron は公称 5 分が最短だが、実際には 10〜30 分遅延したり
     # スキップされたりする。判定を経過時間ではなく height の増加に基づかせているため、
     # 遅延しても誤検知にはならない。
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:

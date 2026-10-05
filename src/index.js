@@ -7,6 +7,32 @@ import { checkPeer as defaultCheckPeer } from './checks/peer.js';
 import { dispatch as defaultDispatch } from './notify/index.js';
 
 /**
+ * チェーン高の進行を判定するのに必要な最小間隔。
+ * Symbol は約 30 秒で 1 ブロックなので、これを下回る間隔で比較しても意味がない。
+ */
+export const MIN_STALL_INTERVAL_MS = 90_000;
+
+/**
+ * チェーン高の進行判定に使える「前回値」を返す。使えない場合は null。
+ *
+ * 前回の正常取得から間がないと、まだ 1 ブロックも生成されていないことがある。
+ * その状態で height を比較すると、正常なノードを chain-stalled と誤判定する。
+ * cron の遅延で実行が詰まり、前の実行の直後に次が走るときに起きる。
+ * 間隔が短すぎる場合は進行判定だけを見送る（疎通とヘルスチェックは通常どおり行う）。
+ *
+ * 本当に停止しているノードは失敗時に lastOkAt が更新されないため、
+ * 2 回目以降は間隔が開き、通常どおり検知される。
+ */
+function comparableHeight(targetState, now) {
+  if (!targetState?.lastHeight) return null;
+  if (!targetState.lastOkAt) return targetState.lastHeight;
+
+  const elapsed = now.getTime() - Date.parse(targetState.lastOkAt);
+  // lastOkAt が壊れていて計算できない場合も、誤検知しない側に倒す。
+  return Number.isFinite(elapsed) && elapsed >= MIN_STALL_INTERVAL_MS ? targetState.lastHeight : null;
+}
+
+/**
  * 1回分の監視を実行し、プロセスの終了コードを返す。
  * 依存はすべて引数で差し替えられるようにしてある（テストでネットワークを使わないため）。
  */
@@ -51,12 +77,13 @@ export async function main(overrides = {}) {
   }
 
   const prevState = await readState(statePath, { logger });
+  const startedAt = now();
 
   const settled = await Promise.allSettled(
     targets.map((target) =>
-      target.kind === 'api'
-        ? checkApi(target, { lastHeight: prevState.targets[target.key]?.lastHeight ?? null })
-        : checkPeer(target)),
+      (target.kind === 'api'
+        ? checkApi(target, { lastHeight: comparableHeight(prevState.targets[target.key], startedAt) })
+        : checkPeer(target))),
   );
 
   // 1件の検査が予期せず例外を投げても、他の対象の結果と state 更新を道連れにしない。
@@ -64,7 +91,7 @@ export async function main(overrides = {}) {
   const results = settled.map((outcome, index) =>
     (outcome.status === 'fulfilled' ? outcome.value : crashedResult(targets[index], outcome.reason)));
 
-  const { nextState, events } = evaluate({ prevState, results, now: now() });
+  const { nextState, events } = evaluate({ prevState, results, now: startedAt });
 
   const downCount = results.filter((r) => !r.ok).length;
   logger.log(`監視対象 ${results.length} 件を検査しました（異常 ${downCount} 件、通知 ${events.length} 件）`);
