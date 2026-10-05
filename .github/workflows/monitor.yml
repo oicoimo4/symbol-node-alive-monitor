@@ -22,9 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # v4.4.0 — https://github.com/actions/checkout/releases/tag/v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - uses: actions/setup-node@v4
+      # v4.4.0 — https://github.com/actions/setup-node/releases/tag/v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '20'
 
@@ -36,6 +38,10 @@ jobs:
         # notified フラグ・lastHeight・週次カウンタを永久に失う。その結果、進行中の
         # 障害の復旧通知が飛ばなくなる。区別できないときは state を触らず中断する。
         run: |
+          # main に誤って state.json がコミットされていた場合、中断経路でも
+          # Persist が古いファイルを push してしまう。先に必ず消しておく。
+          rm -f state.json
+
           rc=0
           git ls-remote --exit-code --heads origin monitoring-state >/dev/null 2>&1 || rc=$?
 

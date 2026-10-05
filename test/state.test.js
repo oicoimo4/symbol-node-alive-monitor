@@ -100,6 +100,25 @@ test('readState は ENOENT 以外の読み込みエラーで警告を出す', as
   assert.match(logger.warnings[0], /読み込み/);
 });
 
+test('未知のバージョンは警告を出して初期状態になる', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'alive-'));
+  const path = join(dir, 'state.json');
+  await writeFile(path, JSON.stringify({ version: 99, targets: {} }), 'utf8');
+  const logger = captureLogger();
+  assert.deepEqual(await readState(path, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /version/);
+});
+
+test('空オブジェクトの state は警告を出さない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'alive-'));
+  const path = join(dir, 'state.json');
+  await writeFile(path, '{}', 'utf8');
+  const logger = captureLogger();
+  assert.deepEqual(await readState(path, { logger }), createInitialState());
+  assert.deepEqual(logger.warnings, []);
+});
+
 test('writeState で書いたものを readState で読み戻せる', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
   const path = join(dir, 'state.json');

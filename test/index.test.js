@@ -25,7 +25,7 @@ function deps(over = {}) {
       dispatch: async () => ({ channels: 1, delivered: 1 }),
       now: () => new Date('2026-10-04T13:00:00.000Z'),
       logger: silentLogger,
-      env: {},
+      env: { DISCORD_WEBHOOK_URL: 'https://d.test' },
       ...over,
     },
   };
@@ -87,13 +87,28 @@ test('通知先がありながら全て送信失敗なら 1 を返し state を�
   assert.equal(written.length, 0);
 });
 
-test('通知先が未設定（channels 0）なら 0 を返し state を書く', async () => {
+test('通知先が未設定なら検査せず 1 を返し state を書かない', async () => {
+  let checked = false;
   const { written, overrides } = deps({
+    env: {},
+    checkApi: async () => { checked = true; throw new Error('呼ばれてはいけない'); },
+    checkPeer: async () => { checked = true; throw new Error('呼ばれてはいけない'); },
+  });
+  assert.equal(await main(overrides), 1);
+  assert.equal(checked, false);
+  assert.equal(written.length, 0);
+});
+
+test('DRY_RUN なら通知先が無くても 0 を返すが state は書かない', async () => {
+  let dispatched = false;
+  const { written, overrides } = deps({
+    env: { DRY_RUN: '1' },
     readState: async () => ({ ...emptyState(), lastWeeklySummaryAt: null }),
-    dispatch: async () => ({ channels: 0, delivered: 0 }),
+    dispatch: async () => { dispatched = true; return { channels: 0, delivered: 0 }; },
   });
   assert.equal(await main(overrides), 0);
-  assert.equal(written.length, 1);
+  assert.equal(dispatched, false);
+  assert.equal(written.length, 0);
 });
 
 test('Webhook URL を環境変数から dispatch に渡す', async () => {

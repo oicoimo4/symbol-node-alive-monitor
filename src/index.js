@@ -35,6 +35,21 @@ export async function main(overrides = {}) {
     return 1;
   }
 
+  const discordUrl = env.DISCORD_WEBHOOK_URL;
+  const slackUrl = env.SLACK_WEBHOOK_URL;
+  const dryRun = env.DRY_RUN === '1';
+
+  if (!discordUrl && !slackUrl && !dryRun) {
+    logger.error(
+      '通知先が1つも設定されていません。DISCORD_WEBHOOK_URL か SLACK_WEBHOOK_URL の'
+      + '少なくとも一方を設定してください。通知できないまま state を更新すると、'
+      + '未送信の通知が「送信済み」として消費され、後から Secret を設定しても'
+      + '二度と送られません。検査を行わずに終了します。'
+      + '（送信せずに動作確認したい場合は DRY_RUN=1 を指定してください）',
+    );
+    return 1;
+  }
+
   const prevState = await readState(statePath, { logger });
 
   const settled = await Promise.allSettled(
@@ -54,10 +69,18 @@ export async function main(overrides = {}) {
   const downCount = results.filter((r) => !r.ok).length;
   logger.log(`監視対象 ${results.length} 件を検査しました（異常 ${downCount} 件、通知 ${events.length} 件）`);
 
+  if (dryRun) {
+    logger.warn(`DRY_RUN: ${events.length} 件のイベントを送信せず、state も保存しません`);
+    for (const event of events) {
+      logger.log(`  ${event.type}: ${event.key ?? 'summary'} — ${event.detail}`);
+    }
+    return 0;
+  }
+
   if (events.length > 0) {
     const { channels, delivered } = await dispatch(events, {
-      discordUrl: env.DISCORD_WEBHOOK_URL,
-      slackUrl: env.SLACK_WEBHOOK_URL,
+      discordUrl,
+      slackUrl,
       logger,
     });
 

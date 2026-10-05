@@ -58,7 +58,15 @@ export async function readState(path, { logger = console } = {}) {
   }
 
   try {
-    return normalizeState(JSON.parse(text));
+    const raw = JSON.parse(text);
+    if (raw && typeof raw === 'object' && Object.keys(raw).length > 0
+        && raw.version !== CURRENT_VERSION) {
+      logger.warn(
+        `state の version が未知のため初期状態から開始します (${path}): `
+        + `version=${JSON.stringify(raw.version)}`,
+      );
+    }
+    return normalizeState(raw);
   } catch (err) {
     logger.warn(`state の解析に失敗したため初期状態から開始します (${path}): ${err.message}`);
     return createInitialState();

@@ -78,6 +78,32 @@ test('Discord: 送信が 2xx でなければ throw する', async () => {
   );
 });
 
+test('Discord: 送信に signal が渡される', async () => {
+  let captured = null;
+  await sendDiscord('https://discord.test/hook', [downEvent()], {
+    fetchImpl: async (_url, init) => { captured = init; return okResponse; },
+  });
+  assert.ok(captured.signal, 'signal が渡されていない');
+});
+
+test('Discord: fetch が例外を投げたらチャンネル名付きで throw する', async () => {
+  await assert.rejects(
+    () => sendDiscord('https://discord.test/hook', [downEvent()], {
+      fetchImpl: async () => { throw new Error('TimeoutError'); },
+    }),
+    /Discord.*TimeoutError/s,
+  );
+});
+
+test('Discord: 非2xx で本文取得が失敗してもステータスは残る', async () => {
+  await assert.rejects(
+    () => sendDiscord('https://discord.test/hook', [downEvent()], {
+      fetchImpl: async () => ({ ok: false, status: 503, text: async () => { throw new Error('aborted'); } }),
+    }),
+    /503/,
+  );
+});
+
 test('Discord: JSON を POST する', async () => {
   let captured = null;
   await sendDiscord('https://discord.test/hook', [downEvent()], {
@@ -157,6 +183,7 @@ test('dispatch: 片方が失敗してももう片方が成功すれば delivered
     fetchImpl: async (url) =>
       url.includes('discord') ? { ok: false, status: 500, text: async () => 'x' } : okResponse,
     logger: silentLogger,
+    sleep: async () => {},
   });
   assert.deepEqual(result, { channels: 2, delivered: 1 });
 });
@@ -166,8 +193,36 @@ test('dispatch: 全て失敗すれば delivered は 0', async () => {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'x' }),
     logger: silentLogger,
+    sleep: async () => {},
   });
   assert.deepEqual(result, { channels: 1, delivered: 0 });
+});
+
+test('dispatch: 送信に失敗しても同一実行内で3回まで再試行する', async () => {
+  let calls = 0;
+  const result = await dispatch([downEvent()], {
+    discordUrl: 'https://discord.test/hook',
+    fetchImpl: async () => { calls += 1; return { ok: false, status: 500, text: async () => 'x' }; },
+    logger: silentLogger,
+    sleep: async () => {},
+  });
+  assert.equal(calls, 3);
+  assert.deepEqual(result, { channels: 1, delivered: 0 });
+});
+
+test('dispatch: 再試行の途中で成功すればそこで止まる', async () => {
+  let calls = 0;
+  const result = await dispatch([downEvent()], {
+    discordUrl: 'https://discord.test/hook',
+    fetchImpl: async () => {
+      calls += 1;
+      return calls < 2 ? { ok: false, status: 500, text: async () => 'x' } : okResponse;
+    },
+    logger: silentLogger,
+    sleep: async () => {},
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(result, { channels: 1, delivered: 1 });
 });
 
 test('dispatch: チャンネル未設定なら警告を出して channels 0 を返す', async () => {
