@@ -1,16 +1,17 @@
 {
   "nodes": [
     {
-      "name": "opening-line-01",
-      "host": "sym-main-01.opening-line.jp",
+      "name": "oimonode_on_Contabo",
+      "host": "vmi2130738.contaboserver.net",
       "api": { "http": 3000, "https": 3001 },
       "peer": { "port": 7900 }
     },
     {
-      "name": "xymtokyo",
-      "host": "xymtokyo.harvest-node.net",
+      "name": "oimonode_ex_on_Contabo",
+      "host": "vmi2627658.contaboserver.net",
       "api": { "https": 3001 },
       "peer": { "port": 7900 }
     }
   ]
 }
+
