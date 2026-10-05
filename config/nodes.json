@@ -9,7 +9,7 @@
     {
       "name": "oimonode_ex_on_Contabo",
       "host": "vmi2627658.contaboserver.net",
-      "api": { "https": 3001 },
+      "api": { "http": 3000, "https": 3001 },
       "peer": { "port": 7900 }
     }
   ]
