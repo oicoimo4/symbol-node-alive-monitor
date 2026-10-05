@@ -18,6 +18,7 @@
 - **ESM のみ。** `package.json` に `"type": "module"`。`require` は使わない。
 - **Node.js 20 以上を前提にする。** `AbortSignal.timeout()`、`structuredClone()`、`node --test` を使用する。
 - **コメント・エラーメッセージ・通知文はすべて日本語で書く。** 変数名と関数名は英語。
+- **テストの起動は引数なしの `node --test` を使う。** ディレクトリを引数に渡す形（`node --test test/`）は Node 26 系で引数がエントリスクリプトとして誤解釈され、コードが正しくても失敗する。引数なしなら Node 20（CI）と Node 26（手元）の両方で動く。
 - **テストはネットワークにも実ファイルシステムにもアクセスしない。** `fetch` と `net.connect` は必ず引数で注入してモックする。ファイル I/O を伴うテストは `node:os` の `tmpdir()` 配下のみを使う。
 - **定数は以下の値を使う**（マジックナンバーを散らさず、定義元から import する）:
   - `FAILURE_THRESHOLD = 2`（この回数の連続失敗で DOWN 通知）
@@ -112,6 +113,7 @@
 | `src/checks/api.js` | API ノードの検査 | 4 |
 | `src/checks/peer.js` | Peer ノードの検査 | 5 |
 | `src/notify/format.js` | 通知先に依存しない文面の生成 | 6 |
+| `src/notify/webhook.js` | Webhook への POST とエラー判定（Discord/Slack 共通） | 6 |
 | `src/notify/discord.js` | Discord 用の整形と送信 | 6 |
 | `src/notify/slack.js` | Slack 用の整形と送信 | 6 |
 | `src/notify/index.js` | 通知のディスパッチ | 6 |
@@ -152,7 +154,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test"
   }
 }
 ```
@@ -480,16 +482,36 @@ test('target の欠けたフィールドは初期値で補われる', () => {
   });
 });
 
-test('readState は存在しないファイルに対して初期状態を返す', async () => {
+/** 警告を捕捉するロガー。テスト出力を汚さないために使う。 */
+const captureLogger = () => {
+  const warnings = [];
+  return { warnings, warn: (message) => warnings.push(message) };
+};
+
+test('readState は存在しないファイルに対して初期状態を返し、警告を出さない', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
-  assert.deepEqual(await readState(join(dir, 'missing.json')), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(join(dir, 'missing.json'), { logger }), createInitialState());
+  assert.deepEqual(logger.warnings, []);
 });
 
-test('readState は壊れた JSON に対して初期状態を返す', async () => {
+test('readState は壊れた JSON に対して初期状態を返し、警告を出す', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'alive-'));
   const path = join(dir, 'broken.json');
   await writeFile(path, 'not json at all', 'utf8');
-  assert.deepEqual(await readState(path), createInitialState());
+  const logger = captureLogger();
+  assert.deepEqual(await readState(path, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /解析/);
+});
+
+test('readState は ENOENT 以外の読み込みエラーで警告を出す', async () => {
+  // ディレクトリを読もうとすると EISDIR になる
+  const dir = await mkdtemp(join(tmpdir(), 'alive-'));
+  const logger = captureLogger();
+  assert.deepEqual(await readState(dir, { logger }), createInitialState());
+  assert.equal(logger.warnings.length, 1);
+  assert.match(logger.warnings[0], /読み込み/);
 });
 
 test('writeState で書いたものを readState で読み戻せる', async () => {
@@ -560,10 +582,24 @@ export function normalizeState(raw) {
   };
 }
 
-export async function readState(path) {
+export async function readState(path, { logger = console } = {}) {
+  let text;
   try {
-    return normalizeState(JSON.parse(await readFile(path, 'utf8')));
-  } catch {
+    text = await readFile(path, 'utf8');
+  } catch (err) {
+    // ファイルが無いのは「初回実行」なので正常系。それ以外の読み込み失敗を黙って
+    // 初期状態に落とすと、通知の重複や週次カウンタの消失として後から現れるため、
+    // 必ず警告を残して原因を追えるようにする。
+    if (err.code !== 'ENOENT') {
+      logger.warn(`state の読み込みに失敗したため初期状態から開始します (${path}): ${err.message}`);
+    }
+    return createInitialState();
+  }
+
+  try {
+    return normalizeState(JSON.parse(text));
+  } catch (err) {
+    logger.warn(`state の解析に失敗したため初期状態から開始します (${path}): ${err.message}`);
     return createInitialState();
   }
 }
@@ -576,7 +612,7 @@ export async function writeState(path, state) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（Task 1 の13件 + 10件 = 23件）
+Expected: PASS（Task 1 の13件 + 11件 = 24件）
 
 - [ ] **Step 5: コミット**
 
@@ -668,6 +704,18 @@ test('2回連続の失敗で down イベントが1回だけ発火する', () => 
   assert.equal(second.nextState.targets['n1::api-https'].incidentsThisWeek, 1);
 });
 
+test('障害が続く間 downSince は最初の失敗時刻に固定される', () => {
+  // 2回の実行で別々の now を渡すこと。同じ now だと
+  // downSince: occurredAt に退化しても気づけない。
+  const LATER = new Date('2026-10-04T13:10:00.000Z');
+  const first = evaluate({ prevState: stateWith(), results: [ng()], now: NOW });
+  const second = evaluate({ prevState: first.nextState, results: [ng()], now: LATER });
+
+  assert.equal(second.nextState.targets['n1::api-https'].downSince, NOW_ISO);
+  assert.equal(eventsOfType(second.events, 'down')[0].downSince, NOW_ISO);
+  assert.equal(second.nextState.updatedAt, LATER.toISOString());
+});
+
 test('3回目以降の失敗では何も発火しない', () => {
   let state = stateWith();
   for (let i = 0; i < 2; i += 1) {
@@ -712,7 +760,9 @@ test('失敗時に lastHeight は更新されない', () => {
   const prev = { ...INITIAL_TARGET_STATE, lastHeight: '150', lastOkAt: '2026-10-04T12:00:00.000Z' };
   const { nextState } = evaluate({
     prevState: stateWith({ 'n1::api-https': prev }),
-    results: [ng({ reason: 'chain-stalled', height: '150' })],
+    // 失敗した検査が返した height は前回値と必ず違う値にする。
+    // 同じ値にすると lastHeight: result.height ?? prev.lastHeight に退化しても通ってしまう。
+    results: [ng({ reason: 'chain-stalled', height: '999' })],
     now: NOW,
   });
   assert.equal(nextState.targets['n1::api-https'].lastHeight, '150');
@@ -961,7 +1011,7 @@ function buildSummaryEvent(targets, results, occurredAt) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 39件）
+Expected: PASS（累計 41件）
 
 - [ ] **Step 5: コミット**
 
@@ -1106,7 +1156,7 @@ export async function withRetry(probe, options = {}) {
 - [ ] **Step 4: 再試行のテストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 47件）
+Expected: PASS（累計 49件）
 
 - [ ] **Step 5: API 検査の失敗するテストを書く**
 
@@ -1344,7 +1394,7 @@ function fail(reason, detail) {
 - [ ] **Step 8: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 60件）
+Expected: PASS（累計 62件）
 
 - [ ] **Step 9: コミット**
 
@@ -1536,7 +1586,7 @@ function fail(detail) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 68件）
+Expected: PASS（累計 70件）
 
 - [ ] **Step 5: コミット**
 
@@ -1551,6 +1601,7 @@ git commit -m "feat: Peer ノードの TCP 疎通検査を追加"
 
 **Files:**
 - Create: `src/notify/format.js`
+- Create: `src/notify/webhook.js`
 - Create: `src/notify/discord.js`
 - Create: `src/notify/slack.js`
 - Create: `src/notify/index.js`
@@ -1560,6 +1611,7 @@ git commit -m "feat: Peer ノードの TCP 疎通検査を追加"
 - Consumes: Event（`src/evaluate.js` が生成）
 - Produces:
   - `titleOf(event: Event): string`, `describeEvent(event: Event): string`（`format.js`。通知先に依存しない文面を作る）
+  - `postWebhook(url: string, bodies: object[], channelName: string, fetchImpl: Function): Promise<void>`（`webhook.js`。2xx 以外なら throw）
   - `formatDiscord(events: Event[]): object[]` — Discord Webhook のリクエストボディ配列（embeds を10件ずつに分割）
   - `sendDiscord(url: string, events: Event[], opts?): Promise<void>` — 失敗時は throw
   - `formatSlack(events: Event[]): object[]` — Slack Webhook のリクエストボディ配列（attachments を20件ずつに分割）
@@ -1579,6 +1631,9 @@ import assert from 'node:assert/strict';
 import { formatDiscord, sendDiscord } from '../src/notify/discord.js';
 import { formatSlack, sendSlack } from '../src/notify/slack.js';
 import { dispatch } from '../src/notify/index.js';
+
+/** dispatch は既定で console に書くため、全テストで差し替えてテスト出力を汚さない。 */
+const silentLogger = { log() {}, warn() {}, error() {} };
 
 const downEvent = (over = {}) => ({
   type: 'down', key: 'n1::api-https', node: 'n1', target: 'api-https',
@@ -1700,6 +1755,7 @@ test('dispatch: 設定された両方のチャンネルに送る', async () => {
     discordUrl: 'https://discord.test/hook',
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 2 });
   assert.deepEqual(urls.sort(), ['https://discord.test/hook', 'https://slack.test/hook']);
@@ -1710,6 +1766,7 @@ test('dispatch: 片方だけ設定されていればそちらにのみ送る', a
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async (url) => { urls.push(url); return okResponse; },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 1 });
   assert.deepEqual(urls, ['https://discord.test/hook']);
@@ -1721,7 +1778,7 @@ test('dispatch: 片方が失敗してももう片方が成功すれば delivered
     slackUrl: 'https://slack.test/hook',
     fetchImpl: async (url) =>
       url.includes('discord') ? { ok: false, status: 500, text: async () => 'x' } : okResponse,
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 2, delivered: 1 });
 });
@@ -1730,7 +1787,7 @@ test('dispatch: 全て失敗すれば delivered は 0', async () => {
   const result = await dispatch([downEvent()], {
     discordUrl: 'https://discord.test/hook',
     fetchImpl: async () => ({ ok: false, status: 500, text: async () => 'x' }),
-    logger: { log() {}, warn() {}, error() {} },
+    logger: silentLogger,
   });
   assert.deepEqual(result, { channels: 1, delivered: 0 });
 });
@@ -1798,10 +1855,37 @@ function truncate(text, limit) {
 }
 ```
 
-- [ ] **Step 4: `src/notify/discord.js` を実装する**
+- [ ] **Step 4: `src/notify/webhook.js`（Discord/Slack 共通の送信処理）を実装する**
+
+送信ループを 1 箇所に集約する。通知の配送は壊れても誰も気づかない層なので、
+後からタイムアウトやリトライを足すときに 2 箇所を直す形にしてはいけない。
+
+```js
+/**
+ * Webhook へ順番に POST する。2xx 以外が返ったら即座に throw する。
+ * body の組み立て（embeds / attachments の形と1通あたりの上限）は呼び出し側の責務。
+ */
+export async function postWebhook(url, bodies, channelName, fetchImpl) {
+  for (const body of bodies) {
+    const response = await fetchImpl(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `${channelName} への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`,
+      );
+    }
+  }
+}
+```
+
+- [ ] **Step 5: `src/notify/discord.js` を実装する**
 
 ```js
 import { describeEvent, titleOf } from './format.js';
+import { postWebhook } from './webhook.js';
 
 const COLORS = { down: 0xe01e5a, recovered: 0x2eb67d, summary: 0x1d9bd1 };
 const MAX_EMBEDS_PER_MESSAGE = 10;
@@ -1823,23 +1907,15 @@ export function formatDiscord(events) {
 
 export async function sendDiscord(url, events, options = {}) {
   const { fetchImpl = fetch } = options;
-  for (const body of formatDiscord(events)) {
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Discord への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`);
-    }
-  }
+  await postWebhook(url, formatDiscord(events), 'Discord', fetchImpl);
 }
 ```
 
-- [ ] **Step 5: `src/notify/slack.js` を実装する**
+- [ ] **Step 6: `src/notify/slack.js` を実装する**
 
 ```js
 import { describeEvent, titleOf } from './format.js';
+import { postWebhook } from './webhook.js';
 
 const COLORS = { down: '#e01e5a', recovered: '#2eb67d', summary: '#1d9bd1' };
 const MAX_ATTACHMENTS_PER_MESSAGE = 20;
@@ -1861,20 +1937,11 @@ export function formatSlack(events) {
 
 export async function sendSlack(url, events, options = {}) {
   const { fetchImpl = fetch } = options;
-  for (const body of formatSlack(events)) {
-    const response = await fetchImpl(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-      throw new Error(`Slack への送信に失敗しました (HTTP ${response.status}): ${await response.text()}`);
-    }
-  }
+  await postWebhook(url, formatSlack(events), 'Slack', fetchImpl);
 }
 ```
 
-- [ ] **Step 6: `src/notify/index.js` を実装する**
+- [ ] **Step 7: `src/notify/index.js` を実装する**
 
 ```js
 import { sendDiscord } from './discord.js';
@@ -1916,12 +1983,12 @@ export async function dispatch(events, options = {}) {
 }
 ```
 
-- [ ] **Step 7: テストが通ることを確認する**
+- [ ] **Step 8: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 86件）
+Expected: PASS（累計 88件）
 
-- [ ] **Step 8: コミット**
+- [ ] **Step 9: コミット**
 
 ```bash
 git add src/notify/ test/notify.test.js
@@ -2063,6 +2130,29 @@ test('Webhook URL を環境変数から dispatch に渡す', async () => {
   assert.equal(received.slackUrl, 'https://s.test');
 });
 
+test('検査が例外を投げても他の対象を巻き込まず state を書く', async () => {
+  const { written, overrides } = deps({
+    checkApi: async () => { throw new Error('BigInt 変換に失敗'); },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  // 例外を投げた対象は異常として記録される（黙殺しない）
+  assert.equal(written[0].targets['n1::api-https'].consecutiveFailures, 1);
+  // 正常だった対象は巻き込まれない
+  assert.equal(written[0].targets['n1::peer'].status, 'up');
+  assert.equal(written[0].targets['n1::peer'].lastOkAt, '2026-10-04T13:00:00.000Z');
+});
+
+test('通知が1件でも届けば 0 を返し state を書く', async () => {
+  const { written, overrides } = deps({
+    readState: async () => ({ ...emptyState(), lastWeeklySummaryAt: null }),
+    dispatch: async () => ({ channels: 2, delivered: 1 }),
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written.length, 1);
+  assert.equal(written[0].lastWeeklySummaryAt, '2026-10-04T13:00:00.000Z');
+});
+
 test('イベントが無ければ dispatch を呼ばずに state を書く', async () => {
   let called = false;
   const { written, overrides } = deps({
@@ -2119,14 +2209,19 @@ export async function main(overrides = {}) {
     return 1;
   }
 
-  const prevState = await readState(statePath);
+  const prevState = await readState(statePath, { logger });
 
-  const results = await Promise.all(
+  const settled = await Promise.allSettled(
     targets.map((target) =>
       target.kind === 'api'
         ? checkApi(target, { lastHeight: prevState.targets[target.key]?.lastHeight ?? null })
         : checkPeer(target)),
   );
+
+  // 1件の検査が予期せず例外を投げても、他の対象の結果と state 更新を道連れにしない。
+  // Promise.all だと fail-fast で全滅し、壊れた state が残り続けて監視が永久に死ぬ。
+  const results = settled.map((outcome, index) =>
+    (outcome.status === 'fulfilled' ? outcome.value : crashedResult(targets[index], outcome.reason)));
 
   const { nextState, events } = evaluate({ prevState, results, now: now() });
 
@@ -2152,6 +2247,23 @@ export async function main(overrides = {}) {
   return 0;
 }
 
+/**
+ * 検査そのものが例外で落ちたときの合成結果。
+ * 握りつぶさず異常として扱うので、2回続けば通知が飛び、detail に例外内容が載る。
+ * 監視自体の不具合を無言にしないための判断。
+ */
+function crashedResult(target, error) {
+  return {
+    key: target.key,
+    node: target.node,
+    label: target.label,
+    ok: false,
+    reason: 'bad-response',
+    detail: `検査が例外で失敗しました: ${error?.message ?? error}`,
+    height: null,
+  };
+}
+
 const invokedDirectly =
   process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 
@@ -2168,7 +2280,7 @@ if (invokedDirectly) {
 - [ ] **Step 4: テストが通ることを確認する**
 
 Run: `npm test`
-Expected: PASS（累計 95件）
+Expected: PASS（累計 99件）
 
 - [ ] **Step 5: コミット**
 
@@ -2226,13 +2338,33 @@ jobs:
 
       - name: Restore state
         # raw.githubusercontent.com は CDN キャッシュで古い値を返すため使わない。
+        #
+        # 「ブランチが無い（初回）」と「一時的に取得できなかった」を必ず区別すること。
+        # 後者を {} にフォールバックさせると、後続の Persist がそれを force push して
+        # notified フラグ・lastHeight・週次カウンタを永久に失う。その結果、進行中の
+        # 障害の復旧通知が飛ばなくなる。区別できないときは state を触らず中断する。
         run: |
-          if git fetch --depth=1 origin monitoring-state 2>/dev/null \
-             && git show FETCH_HEAD:state.json > state.json 2>/dev/null; then
-            echo "既存の state を復元しました"
-          else
+          rc=0
+          git ls-remote --exit-code --heads origin monitoring-state >/dev/null 2>&1 || rc=$?
+
+          if [ "$rc" -eq 0 ]; then
+            # ブランチは存在する。ここから先の失敗は一時障害なので握りつぶさない
+            # （fetch が落ちればこのステップが非ゼロ終了し、state.json が無いまま
+            #   Persist は test -f で何もせず、state ブランチは元のまま残る）。
+            git fetch --depth=1 origin monitoring-state
+            if git show FETCH_HEAD:state.json > state.json 2>/dev/null; then
+              echo "既存の state を復元しました"
+            else
+              echo '{}' > state.json
+              echo "state ブランチに state.json が無いため初期状態から開始します"
+            fi
+          elif [ "$rc" -eq 2 ]; then
+            # --exit-code の 2 は「該当する ref が無い」= 正真正銘の初回実行
             echo '{}' > state.json
-            echo "既存の state がないため初期状態から開始します"
+            echo "state ブランチが存在しないため初期状態から開始します"
+          else
+            echo "::error::state ブランチの存在確認に失敗しました (git ls-remote exit=$rc)。state を失わないため中断します。"
+            exit 1
           fi
 
       - name: Run checks
@@ -2246,6 +2378,9 @@ jobs:
         # この push が「リポジトリ活動」となり、Public リポジトリの
         # scheduled workflow が 60 日で自動停止する仕様を回避する。
         if: always()
+        env:
+          # 式展開でスクリプト本文に直接埋め込まず、環境変数経由で渡す
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           test -f state.json || exit 0
           tmp="$(mktemp -d)"
@@ -2257,7 +2392,7 @@ jobs:
               -c user.email='actions@users.noreply.github.com' \
               commit -q -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push -q --force \
-            "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
             HEAD:monitoring-state
 ```
 
@@ -2275,13 +2410,18 @@ Symbol の API ノード / Peer ノードを GitHub Actions だけで死活監�
 実行間の状態（前回のチェーン高、連続失敗回数、通知済みフラグ）は
 `monitoring-state` ブランチの `state.json` に force push して引き継ぐ。
 
+> **この force push を「変更があったときだけ」に最適化してはいけない。**
+> GitHub は Public リポジトリの scheduled workflow を、リポジトリ活動が 60 日間
+> 途切れると自動で無効化する。毎回の push がその活動そのものであり、条件付きに
+> した瞬間、監視は 2 か月後に自分で止まる。しかも止まったことは通知されない。
+
 ## 監視内容
 
 | 対象 | 確認すること |
 |---|---|
 | API (http / https) | `/node/health` が `apiNode` と `db` の両方で `up` を返すか |
 | API (http / https) | `/chain/info` の `height` が前回より進んでいるか |
-| Peer | 7900 番への TCP 接続が確立するか |
+| Peer | Peer ポート（既定 7900、`peer.port` で変更可）への TCP 接続が確立するか |
 
 2 回連続で失敗したときに初めて通知する（瞬断による誤報を防ぐため、実質 20 分継続した障害が対象）。
 障害が続いている間は再通知しない。復旧したら復旧通知を送る。
@@ -2335,11 +2475,20 @@ Webhook URL は Secrets に入れるため漏れない。
 - `name` は状態管理のキーに使うため、一意かつ変更しないこと。変更すると履歴が切れて新規ノード扱いになる。
 - `api.http` / `api.https` / `peer.port` はそれぞれ任意。書いたものだけを検査する。
 - http と https を両方書くと別々に監視される。https だけが落ちる（TLS 証明書の期限切れ）パターンを検知できる。
+- ただし、前段に nginx を置いて http(3000) から https(3001) へ 301 リダイレクトしているノードでは、
+  `fetch` がリダイレクトを追うため http の監視も実質 https を見ることになり、証明書切れの検知が効かない。
+  その場合は `api.http` を書かず https だけにする。`curl -sI http://<host>:3000/node/health` で
+  301 が返るかどうかで判別できる。
 
 ### 5. 動作確認する
 
 Actions タブ → `node-alive-monitor` → Run workflow で手動実行する。
 初回実行では必ずサマリ通知が送られるので、Discord / Slack に届くことを確認する。
+
+手動実行を 30 秒以内に連続で行うと、Symbol のブロック間隔（約 30 秒）より短い間隔で
+チェーン高を見ることになり、`chain-stalled` として「異常 N 件」と表示されることがある。
+これは正常な挙動で、通知には至らない（通知には 2 回連続の失敗が必要）。
+確認のために 2 回続けて回すときは 1 分ほど空けるとよい。
 
 ## 通知の種類
 
@@ -2379,7 +2528,7 @@ DISCORD_WEBHOOK_URL=... node src/index.js   # 実際に 1 回検査する
 - [ ] **Step 3: テストが全て通ることを最終確認する**
 
 Run: `npm test`
-Expected: PASS（95件、失敗 0件）
+Expected: PASS（99件、失敗 0件）
 
 - [ ] **Step 4: 実際に 1 回動かして確認する**
 
@@ -2399,7 +2548,7 @@ git commit -m "feat: GitHub Actions ワークフローと README を追加"
 
 ## 完了条件
 
-- [ ] `npm test` が 95 件すべて通る
+- [ ] `npm test` が 99 件すべて通る
 - [ ] `node src/index.js` がローカルで実在ノードに対して完走する
 - [ ] GitHub に Public リポジトリとして push されている
 - [ ] Secrets に Webhook URL が登録されている

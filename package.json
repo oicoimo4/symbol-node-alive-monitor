@@ -1,0 +1,13 @@
+{
+  "name": "node-alive-monitoring",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Symbol の API / Peer ノードを GitHub Actions で死活監視する",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

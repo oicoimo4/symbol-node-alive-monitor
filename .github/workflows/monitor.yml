@@ -1,0 +1,88 @@
+name: node-alive-monitor
+
+on:
+  schedule:
+    # GitHub Actions の cron は公称 5 分が最短だが、実際には 10〜30 分遅延したり
+    # スキップされたりする。判定を経過時間ではなく height の増加に基づかせているため、
+    # 遅延しても誤検知にはならない。
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  # monitoring-state ブランチへの push に必要
+  contents: write
+
+concurrency:
+  # state の書き込み競合を防ぐ
+  group: node-alive-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Restore state
+        # raw.githubusercontent.com は CDN キャッシュで古い値を返すため使わない。
+        #
+        # 「ブランチが無い（初回）」と「一時的に取得できなかった」を必ず区別すること。
+        # 後者を {} にフォールバックさせると、後続の Persist がそれを force push して
+        # notified フラグ・lastHeight・週次カウンタを永久に失う。その結果、進行中の
+        # 障害の復旧通知が飛ばなくなる。区別できないときは state を触らず中断する。
+        run: |
+          rc=0
+          git ls-remote --exit-code --heads origin monitoring-state >/dev/null 2>&1 || rc=$?
+
+          if [ "$rc" -eq 0 ]; then
+            # ブランチは存在する。ここから先の失敗は一時障害なので握りつぶさない
+            # （fetch が落ちればこのステップが非ゼロ終了し、state.json が無いまま
+            #   Persist は test -f で何もせず、state ブランチは元のまま残る）。
+            git fetch --depth=1 origin monitoring-state
+            if git show FETCH_HEAD:state.json > state.json 2>/dev/null; then
+              echo "既存の state を復元しました"
+            else
+              echo '{}' > state.json
+              echo "state ブランチに state.json が無いため初期状態から開始します"
+            fi
+          elif [ "$rc" -eq 2 ]; then
+            # --exit-code の 2 は「該当する ref が無い」= 正真正銘の初回実行
+            echo '{}' > state.json
+            echo "state ブランチが存在しないため初期状態から開始します"
+          else
+            echo "::error::state ブランチの存在確認に失敗しました (git ls-remote exit=$rc)。state を失わないため中断します。"
+            exit 1
+          fi
+
+      - name: Run checks
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: node src/index.js
+
+      - name: Persist state
+        # 検査が途中で落ちた場合は復元した古い state をそのまま push し直すだけで害はない。
+        # この push が「リポジトリ活動」となり、Public リポジトリの
+        # scheduled workflow が 60 日で自動停止する仕様を回避する。
+        if: always()
+        env:
+          # 式展開でスクリプト本文に直接埋め込まず、環境変数経由で渡す
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test -f state.json || exit 0
+          tmp="$(mktemp -d)"
+          cp state.json "$tmp/state.json"
+          cd "$tmp"
+          git init -q
+          git add state.json
+          git -c user.name='node-alive-monitor' \
+              -c user.email='actions@users.noreply.github.com' \
+              commit -q -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" \
+            HEAD:monitoring-state
