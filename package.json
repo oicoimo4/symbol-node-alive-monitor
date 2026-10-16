@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Symbol の API / Peer ノードを GitHub Actions で死活監視する",
+  "license": "MIT",
   "engines": {
     "node": ">=20"
   },

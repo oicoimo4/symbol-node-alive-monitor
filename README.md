@@ -519,3 +519,9 @@ test/                 node:test（103 件）
 
 - 設計書: `docs/superpowers/specs/2026-10-04-node-alive-monitoring-design.md`
 - 実装計画: `docs/superpowers/plans/2026-10-04-node-alive-monitoring.md`
+
+---
+
+## ライセンス
+
+[MIT License](LICENSE)
