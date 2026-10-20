@@ -57,6 +57,15 @@ export function parseConfig(raw) {
       });
     }
 
+    if (node.harvesters !== undefined && typeof node.harvesters !== 'boolean') {
+      throw new Error(
+        `${where}.harvesters: true か false が必要です (受け取った値: ${JSON.stringify(node.harvesters)})`,
+      );
+    }
+    if (node.harvesters) {
+      targets.push(harvesterTarget(node, where));
+    }
+
     if (targets.length === before) {
       throw new Error(`${where}: 監視対象が1件も展開されませんでした`);
     }
@@ -72,6 +81,26 @@ export function parseConfig(raw) {
 export async function loadConfig(path) {
   const text = await readFile(path, 'utf8');
   return parseConfig(JSON.parse(text));
+}
+
+/**
+ * harvester 一覧の取得先を作る。一覧はノード単位の値なので、http と https の両方から
+ * 取ると二重計上になる。https を優先し、無ければ http から 1 回だけ取得する。
+ * ポート番号は api の展開時に検証済み。
+ */
+function harvesterTarget(node, where) {
+  const scheme = node.api?.https !== undefined ? 'https' : 'http';
+  const port = node.api?.[scheme];
+  if (port === undefined) {
+    throw new Error(`${where}.harvesters: harvester の一覧は REST から取得するため "api" の http か https が必要です`);
+  }
+  return {
+    key: `${node.name}::harvesters`,
+    node: node.name,
+    kind: 'harvesters',
+    label: 'harvesters',
+    url: `${scheme}://${node.host}:${port}`,
+  };
 }
 
 function assertPort(port, where) {
