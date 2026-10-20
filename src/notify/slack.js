@@ -1,7 +1,7 @@
 import { describeEvent, titleOf } from './format.js';
 import { postWebhook } from './webhook.js';
 
-const COLORS = { down: '#e01e5a', recovered: '#2eb67d', summary: '#1d9bd1' };
+const COLORS = { down: '#e01e5a', recovered: '#2eb67d', summary: '#1d9bd1', harvesters: '#ecb22e' };
 const MAX_ATTACHMENTS_PER_MESSAGE = 20;
 
 export function formatSlack(events) {

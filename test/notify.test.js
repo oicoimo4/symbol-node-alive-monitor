@@ -242,3 +242,82 @@ test('dispatch: イベントが空なら何も送らない', async () => {
   });
   assert.deepEqual(result, { channels: 0, delivered: 0 });
 });
+
+// --- harvester ---
+
+/** 64 文字の公開鍵を作る。通知に出るのは先頭 12 文字だけ。 */
+const publicKey = (prefix) => prefix.padEnd(64, '0');
+
+const harvestersEvent = (over = {}) => ({
+  type: 'harvesters', key: 'n1::harvesters', node: 'n1', target: 'harvesters',
+  reason: null, detail: '6 → 7 件', hint: null, downSince: null,
+  occurredAt: '2026-10-20T14:00:00.000Z', snapshot: null,
+  added: [publicKey('9D4B2C01A7F3')], removed: [], before: 6, after: 7, ...over,
+});
+
+test('Discord: harvester 変化は琥珀の embed で、見出しにノード名だけを出す', () => {
+  const [body] = formatDiscord([harvestersEvent()]);
+  assert.equal(body.embeds[0].color, 0xecb22e);
+  assert.equal(body.embeds[0].title, '🌾 Harvester 変化: n1');
+});
+
+test('harvester 変化の本文は公開鍵を先頭 12 文字に切り詰め、空の離脱行を出さない', () => {
+  const [body] = formatDiscord([harvestersEvent()]);
+  assert.equal(body.embeds[0].description, [
+    '6 → 7 件',
+    '',
+    '参加: 9D4B2C01A7F3…',
+    '',
+    '確認時刻: 2026-10-20T14:00:00.000Z',
+  ].join('\n'));
+});
+
+test('harvester の参加と離脱が両方あれば両方の行を出し、複数はカンマ区切りにする', () => {
+  const [body] = formatDiscord([harvestersEvent({
+    detail: '1 → 2 件',
+    added: [publicKey('AAAAAAAAAAAA'), publicKey('BBBBBBBBBBBB')],
+    removed: [publicKey('CCCCCCCCCCCC')],
+  })]);
+  assert.match(body.embeds[0].description, /^参加: AAAAAAAAAAAA…, BBBBBBBBBBBB…$/m);
+  assert.match(body.embeds[0].description, /^離脱: CCCCCCCCCCCC…$/m);
+});
+
+test('harvester の離脱だけなら参加の行を出さない', () => {
+  const [body] = formatDiscord([harvestersEvent({
+    detail: '7 → 6 件', added: [], removed: [publicKey('9D4B2C01A7F3')],
+  })]);
+  assert.doesNotMatch(body.embeds[0].description, /参加/);
+  assert.match(body.embeds[0].description, /^離脱: 9D4B2C01A7F3…$/m);
+});
+
+test('Slack: harvester 変化は琥珀の attachment になる', () => {
+  const [body] = formatSlack([harvestersEvent()]);
+  assert.equal(body.attachments[0].color, '#ecb22e');
+  assert.equal(body.attachments[0].title, '🌾 Harvester 変化: n1');
+});
+
+test('summary に harvesters があれば対象一覧の後に件数と最終確認時刻を追記する', () => {
+  const event = { ...summaryEvent(), harvesters: [{ node: 'n1', count: 6, observedAt: '2026-10-04T13:00:00.000Z' }] };
+  const [body] = formatDiscord([event]);
+  assert.equal(body.embeds[0].description, [
+    '🟢 n1 / api-https — 障害 0 回 — height 200 — 最終正常 2026-10-04T13:00:00.000Z',
+    '🔴 n1 / peer — 障害 2 回 — 最終正常 2026-10-03T13:00:00.000Z',
+    '',
+    '🌾 n1 — harvester 6 件 — 最終確認 2026-10-04T13:00:00.000Z',
+    '',
+    '確認時刻: 2026-10-04T13:00:00.000Z',
+  ].join('\n'));
+});
+
+test('harvesters の無い summary は従来どおり描画される', () => {
+  const expected = [
+    '🟢 n1 / api-https — 障害 0 回 — height 200 — 最終正常 2026-10-04T13:00:00.000Z',
+    '🔴 n1 / peer — 障害 2 回 — 最終正常 2026-10-03T13:00:00.000Z',
+    '',
+    '確認時刻: 2026-10-04T13:00:00.000Z',
+  ].join('\n');
+  for (const event of [summaryEvent(), { ...summaryEvent(), harvesters: [] }]) {
+    const [body] = formatDiscord([event]);
+    assert.equal(body.embeds[0].description, expected);
+  }
+});
