@@ -365,14 +365,15 @@ Actions タブ → `node-alive-monitor` → 右上の `⋯` → Disable workflow
 確認時刻: 2026-10-20T14:00:00.000Z
 ```
 
-- 一覧は `/node/unlockedaccount` から取得する。https を優先し、無ければ http から 1 回だけ取る
+- 一覧は `/node/unlockedaccount` から取得する。https を優先し、無ければ http を使う。http と https の両方から
+  取ると二重計上になるため、1 ノードにつき 1 つの URL からだけ取得する
 - 公開鍵は先頭 12 文字だけを出す。アドレスへの変換はしない（外部依存が必要になるため）
 - **初回は記録するだけで通知しない**（比較対象が無いため）
 - **同じ実行で api 検査（http か https）が成功したときだけ比較する。** ノードが落ちている回は
   前回の一覧をそのまま残すので、障害のたびに「全員離脱」の誤報が出ることはない
 - harvester の増減は障害ではないので、DOWN 判定や週次サマリの障害回数には影響しない
-- 週次サマリの末尾に、ノードごとの現在件数と最終確認時刻が載る。**最終確認時刻が古いままなら、
-  一覧を取得できない状態が続いている**
+- 週次サマリの対象一覧の後に、ノードごとの現在件数と最終確認時刻が載る。**最終確認時刻が古いままなら、
+  一覧を取得できない状態が続いている。** 一度も取得できていないノードは「未取得」と出る
 - 他人のノードを監視しているだけなら書かないこと（既定は `false`）
 
 ---
@@ -424,7 +425,7 @@ git show FETCH_HEAD:state.json
 | `notified` | DOWN 通知を送信済みか。障害中の再通知を防ぐ |
 | `incidentsThisWeek` | 週次サマリ送信時にリセットされる障害回数 |
 
-`harvesters` は `harvesters: true` のノードにだけ作られる。`accounts` は前回確認できた
+`harvesters` のエントリは `harvesters: true` のノードにだけ作られる（該当ノードが無ければ `{}`）。`accounts` は前回確認できた
 harvester の公開鍵（ソート済み）、`observedAt` はそれを確認した時刻。ノードや api が落ちていて
 確認できなかった回は更新されない。設定から `harvesters` を外すと、次の実行でエントリが消える。
 
@@ -526,7 +527,7 @@ TLS 証明書の期限切れがほぼ確実。通知にもその旨が添えら�
 ### ローカルでの実行
 
 ```bash
-npm test                                     # テスト（ネットワークアクセスなし、168 件）
+npm test                                     # テスト（ネットワークアクセスなし、174 件）
 DRY_RUN=1 node src/index.js                  # 1 回だけ検査する（送信せず、state も保存しない）
 DISCORD_WEBHOOK_URL=... node src/index.js    # 通知ありで 1 回検査する
 ```
@@ -572,7 +573,7 @@ src/
   notify/discord.js   Discord 用の整形
   notify/slack.js     Slack 用の整形
   notify/index.js     通知のディスパッチ
-test/                 node:test（168 件）
+test/                 node:test（174 件）
 ```
 
 `evaluate.js` は**副作用を持たない純粋関数**になっている（現在時刻すら引数で受け取る）。
