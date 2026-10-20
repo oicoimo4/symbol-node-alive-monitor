@@ -526,7 +526,7 @@ TLS 証明書の期限切れがほぼ確実。通知にもその旨が添えら�
 ### ローカルでの実行
 
 ```bash
-npm test                                     # テスト（ネットワークアクセスなし、110 件）
+npm test                                     # テスト（ネットワークアクセスなし、168 件）
 DRY_RUN=1 node src/index.js                  # 1 回だけ検査する（送信せず、state も保存しない）
 DISCORD_WEBHOOK_URL=... node src/index.js    # 通知ありで 1 回検査する
 ```
