@@ -140,6 +140,35 @@ test('prevHarvesters を変更しない', () => {
   assert.deepEqual(prev, snapshot);
 });
 
+test('Object.prototype と同じ名前のノードでも前回の記録と取り違えない', () => {
+  for (const name of ['constructor', 'toString', '__proto__']) {
+    const key = `${name}::harvesters`;
+
+    // 前回の記録が無いまま観測に失敗しても、例外を投げず何も記録しない
+    const failed = run({}, [missed({ key, node: name })]);
+    assert.deepEqual(failed.events, [], `${name}: 失敗時のイベント`);
+    assert.deepEqual(Object.keys(failed.nextHarvesters), [], `${name}: 失敗時の記録`);
+
+    // 初回の観測は、そのノード名のまま自分自身のキーとして記録される
+    const first = run({}, [seen(['AA'], { key, node: name })]);
+    assert.deepEqual(first.events, [], `${name}: 初回のイベント`);
+    assert.equal(Object.hasOwn(first.nextHarvesters, name), true, `${name}: 記録が自分自身のキーで残る`);
+    assert.deepEqual(first.nextHarvesters[name].accounts, ['AA'], `${name}: 記録した一覧`);
+
+    // 前回の記録があれば、通常のノードと同じように差分を出す
+    const prev = Object.fromEntries([[name, record(['AA'])]]);
+    const changed = run(prev, [seen(['AA', 'BB'], { key, node: name })]);
+    assert.equal(changed.events.length, 1, `${name}: 差分のイベント数`);
+    assert.deepEqual(changed.events[0].added, ['BB'], `${name}: 参加`);
+  }
+});
+
+test('ok でも accounts が配列でない観測は失敗として扱う', () => {
+  const { nextHarvesters, events } = run({ n1: record(['AA']) }, [seen([], { accounts: null })]);
+  assert.deepEqual(events, []);
+  assert.deepEqual(nextHarvesters, { n1: { accounts: ['AA'], observedAt: EARLIER } });
+});
+
 // --- gateByApiHealth ---
 
 test('api-https が成功しているノードの観測はそのまま通す', () => {

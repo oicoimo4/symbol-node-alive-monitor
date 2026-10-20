@@ -10,22 +10,24 @@ const API_LABELS = new Set(['api-http', 'api-https']);
  */
 export function evaluateHarvesters({ prevHarvesters, observations, now }) {
   const occurredAt = now.toISOString();
-  const nextHarvesters = {};
+  const records = [];
   const events = [];
 
   for (const observation of observations) {
     const { node } = observation;
-    const prev = prevHarvesters?.[node];
+    // ノード名は自由な文字列なので、constructor や __proto__ のような名前でも
+    // Object.prototype のメンバーを前回の記録と取り違えないようにする。
+    const prev = Object.hasOwn(prevHarvesters ?? {}, node) ? prevHarvesters[node] : undefined;
 
-    if (!observation.ok) {
+    if (!observation.ok || !Array.isArray(observation.accounts)) {
       // 観測できなかった回は比較せず、前回の記録をそのまま引き継ぐ。
-      if (prev) nextHarvesters[node] = { accounts: [...prev.accounts], observedAt: prev.observedAt };
+      if (prev) records.push([node, { accounts: [...prev.accounts], observedAt: prev.observedAt }]);
       continue;
     }
 
     // 並び順や重複に左右されないよう、集合として扱う。
     const current = new Set(observation.accounts);
-    nextHarvesters[node] = { accounts: [...current].sort(), observedAt: occurredAt };
+    records.push([node, { accounts: [...current].sort(), observedAt: occurredAt }]);
 
     // 初回は比較対象がないので記録だけする。
     if (!prev) continue;
@@ -53,7 +55,7 @@ export function evaluateHarvesters({ prevHarvesters, observations, now }) {
     });
   }
 
-  return { nextHarvesters, events };
+  return { nextHarvesters: Object.fromEntries(records), events };
 }
 
 /**

@@ -50,15 +50,16 @@ export function normalizeState(raw) {
  * 記録なしなら次回は初回観測として黙って記録し直されるだけで済む。
  */
 function normalizeHarvesters(raw) {
-  const harvesters = {};
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return harvesters;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
 
+  const records = [];
   for (const [node, entry] of Object.entries(raw)) {
     const accounts = entry?.accounts;
     if (!Array.isArray(accounts) || !accounts.every((account) => typeof account === 'string')) continue;
-    harvesters[node] = { accounts: [...accounts], observedAt: entry.observedAt ?? null };
+    records.push([node, { accounts: [...accounts], observedAt: entry.observedAt ?? null }]);
   }
-  return harvesters;
+  // ノード名は自由な文字列なので、{} への代入だと __proto__ が prototype の差し替えになり記録が消える。
+  return Object.fromEntries(records);
 }
 
 export async function readState(path, { logger = console } = {}) {

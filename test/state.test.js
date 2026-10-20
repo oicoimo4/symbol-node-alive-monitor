@@ -99,6 +99,15 @@ test('harvesters がオブジェクトでなければ空として扱う', () => 
   }
 });
 
+test('__proto__ という名前のノードの記録も保持される', () => {
+  // JSON.parse は __proto__ を自分自身のキーとして作る。{} への代入で写すと prototype の差し替えになり記録が消える
+  const normalized = normalizeState(JSON.parse(
+    '{"version":1,"targets":{},"harvesters":{"__proto__":{"accounts":["AA"],"observedAt":"2026-10-04T13:00:00.000Z"}}}',
+  ));
+  assert.equal(Object.hasOwn(normalized.harvesters, '__proto__'), true);
+  assert.deepEqual(normalized.harvesters['__proto__'].accounts, ['AA']);
+});
+
 /** 警告を捕捉するロガー。テスト出力を汚さないために使う。 */
 const captureLogger = () => {
   const warnings = [];
