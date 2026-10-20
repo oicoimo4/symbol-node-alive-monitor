@@ -116,7 +116,8 @@ export async function main(overrides = {}) {
 
   // evaluate は harvester を知らないので、state とサマリにはここで合流させる。
   const nextState = { ...livenessState, harvesters: nextHarvesters };
-  const events = [...annotateSummary(livenessEvents, nextHarvesters), ...harvesterEvents];
+  const harvesterNodes = harvesterTargets.map((target) => target.node);
+  const events = [...annotateSummary(livenessEvents, nextHarvesters, harvesterNodes), ...harvesterEvents];
 
   const downCount = results.filter((r) => !r.ok).length;
   logger.log(`監視対象 ${results.length} 件を検査しました（異常 ${downCount} 件、通知 ${events.length} 件）`);

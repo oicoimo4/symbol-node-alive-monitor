@@ -37,9 +37,11 @@ function describeSummary(event) {
   });
   // harvesters はサマリを作った後で index.js が付け加える（evaluate を変更しないため）。
   // 最終確認時刻が古いままなら、一覧を取得できない状態が続いている。
+  // count が null のノードは、設定したのに一覧を一度も取得できていない。無言にしないために出す。
   if (event.harvesters?.length > 0) {
-    lines.push('', ...event.harvesters.map((item) =>
-      `🌾 ${item.node} — harvester ${item.count} 件 — 最終確認 ${item.observedAt ?? '未確認'}`));
+    lines.push('', ...event.harvesters.map((item) => (item.count === null
+      ? `🌾 ${item.node} — harvester 未取得`
+      : `🌾 ${item.node} — harvester ${item.count} 件 — 最終確認 ${item.observedAt ?? '未確認'}`)));
   }
   lines.push('', `確認時刻: ${event.occurredAt}`);
   return truncate(lines.join('\n'), 3900);

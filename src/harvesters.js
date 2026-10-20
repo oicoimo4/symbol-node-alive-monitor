@@ -83,16 +83,22 @@ export function gateByApiHealth(observations, results) {
 /**
  * 週次サマリに harvester の現在件数を付け加える。
  * サマリは evaluate が作るが、evaluate を変更しないためにここで後から付ける。
- * 記録が 1 件も無ければ何も付けない。受け取った配列もイベントも変更しない。
+ *
+ * nodes は harvesters: true に設定したノード名（設定の並び順）。設定したのに記録が無い
+ * ノードは、機能を有効にしていないのと見分けがつかなくなるため count が null の項目で
+ * 載せる（一覧を一度も取得できていない）。nodes が空なら何も付けない。
+ * 受け取った配列もイベントも変更しない。
  */
-export function annotateSummary(events, harvesters) {
-  const entries = Object.entries(harvesters ?? {});
-  if (entries.length === 0) return [...events];
+export function annotateSummary(events, harvesters, nodes) {
+  if (nodes.length === 0) return [...events];
 
-  const summary = entries.map(([node, entry]) => ({
-    node,
-    count: entry.accounts.length,
-    observedAt: entry.observedAt,
-  }));
+  const summary = nodes.map((node) => {
+    const entry = Object.hasOwn(harvesters ?? {}, node) ? harvesters[node] : undefined;
+    return {
+      node,
+      count: entry ? entry.accounts.length : null,
+      observedAt: entry ? entry.observedAt : null,
+    };
+  });
   return events.map((event) => (event.type === 'summary' ? { ...event, harvesters: summary } : event));
 }

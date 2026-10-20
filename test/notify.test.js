@@ -309,6 +309,12 @@ test('summary に harvesters があれば対象一覧の後に件数と最終確
   ].join('\n'));
 });
 
+test('summary では一覧を一度も取得できていないノードを未取得と出す', () => {
+  const event = { ...summaryEvent(), harvesters: [{ node: 'n2', count: null, observedAt: null }] };
+  const [body] = formatDiscord([event]);
+  assert.match(body.embeds[0].description, /^🌾 n2 — harvester 未取得$/m);
+});
+
 test('harvesters の無い summary は従来どおり描画される', () => {
   const expected = [
     '🟢 n1 / api-https — 障害 0 回 — height 200 — 最終正常 2026-10-04T13:00:00.000Z',

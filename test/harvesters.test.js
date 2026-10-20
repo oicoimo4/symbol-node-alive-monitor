@@ -233,18 +233,26 @@ const downEvent = () => ({
 
 test('サマリにだけ harvester の件数を付ける', () => {
   const down = downEvent();
-  const result = annotateSummary([down, summaryEvent()], { n1: record(['AA', 'BB'], NOW_ISO) });
+  const result = annotateSummary([down, summaryEvent()], { n1: record(['AA', 'BB'], NOW_ISO) }, ['n1']);
   assert.equal(result[0], down);
   assert.deepEqual(result[1].harvesters, [{ node: 'n1', count: 2, observedAt: NOW_ISO }]);
 });
 
-test('harvester の記録が無ければサマリに何も付けない', () => {
-  const [summary] = annotateSummary([summaryEvent()], {});
+test('harvester を設定したノードが無ければサマリに何も付けない', () => {
+  const [summary] = annotateSummary([summaryEvent()], {}, []);
   assert.equal('harvesters' in summary, false);
+});
+
+test('harvester を設定したのに記録が無いノードは未取得として載せる', () => {
+  const [summary] = annotateSummary([summaryEvent()], { n1: record(['AA'], NOW_ISO) }, ['n1', 'n2']);
+  assert.deepEqual(summary.harvesters, [
+    { node: 'n1', count: 1, observedAt: NOW_ISO },
+    { node: 'n2', count: null, observedAt: null },
+  ]);
 });
 
 test('annotateSummary は受け取ったイベントを変更しない', () => {
   const events = [summaryEvent()];
-  annotateSummary(events, { n1: record(['AA']) });
+  annotateSummary(events, { n1: record(['AA']) }, ['n1']);
   assert.equal('harvesters' in events[0], false);
 });

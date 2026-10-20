@@ -326,6 +326,19 @@ test('週次サマリに今回確認した harvester の件数が載る', async 
   assert.deepEqual(summary.harvesters, [{ node: 'n1', count: 2, observedAt: '2026-10-04T13:00:00.000Z' }]);
 });
 
+test('一覧を一度も取得できていないノードも週次サマリに未取得として載る', async () => {
+  let sent = null;
+  const { overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({}, { lastWeeklySummaryAt: null }),
+    checkHarvesters: async () => { throw new Error('想定外の例外'); },
+    dispatch: async (events) => { sent = events; return { channels: 1, delivered: 1 }; },
+  });
+  assert.equal(await main(overrides), 0);
+  const summary = sent.find((e) => e.type === 'summary');
+  assert.deepEqual(summary.harvesters, [{ node: 'n1', count: null, observedAt: null }]);
+});
+
 test('harvester の変化を 1 件も届けられなければ state を更新せず次回に持ち越す', async () => {
   const { written, overrides } = deps({
     loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
