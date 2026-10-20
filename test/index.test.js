@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { main } from '../src/index.js';
+import { evaluate as realEvaluate } from '../src/evaluate.js';
 
 const silentLogger = { log() {}, warn() {}, error() {} };
 
@@ -10,6 +11,17 @@ const TARGETS = [
 ];
 
 const emptyState = () => ({ version: 1, updatedAt: null, lastWeeklySummaryAt: '2026-10-04T12:00:00.000Z', targets: {} });
+
+const HARVESTER_TARGET = { key: 'n1::harvesters', node: 'n1', kind: 'harvesters', label: 'harvesters', url: 'https://a.test:3001' };
+
+/** 指定した一覧を返す checkHarvesters のモックを作る。 */
+const harvested = (accounts) => async (target) => ({
+  key: target.key, node: target.node, label: target.label,
+  ok: true, reason: null, detail: `harvester ${accounts.length} 件`, accounts,
+});
+
+/** harvester の前回記録を持つ state を返す readState のモックを作る。 */
+const withHarvesters = (harvesters, over = {}) => async () => ({ ...emptyState(), harvesters, ...over });
 
 /** すべての依存をモックした main の既定引数を作る。 */
 function deps(over = {}) {
@@ -22,6 +34,7 @@ function deps(over = {}) {
       writeState: async (_path, state) => { written.push(state); },
       checkApi: async (target) => ({ key: target.key, node: target.node, label: target.label, ok: true, reason: null, detail: '正常', height: '200' }),
       checkPeer: async (target) => ({ key: target.key, node: target.node, label: target.label, ok: true, reason: null, detail: '正常', height: null }),
+      checkHarvesters: harvested([]),
       dispatch: async () => ({ channels: 1, delivered: 1 }),
       now: () => new Date('2026-10-04T13:00:00.000Z'),
       logger: silentLogger,
@@ -226,4 +239,100 @@ test('イベントが無ければ dispatch を呼ばずに state を書く', asy
   assert.equal(await main(overrides), 0);
   assert.equal(called, false);
   assert.equal(written.length, 1);
+});
+
+test('harvesters の対象は evaluate に渡さず、死活監視の state も作らない', async () => {
+  let evaluatedKeys;
+  const { written, overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    checkHarvesters: harvested(['AA']),
+    evaluate: (args) => {
+      evaluatedKeys = args.results.map((r) => r.key);
+      return realEvaluate(args);
+    },
+  });
+  // readState は harvesters を持たない、harvester 監視を入れる前の形の state を返す
+  assert.equal(await main(overrides), 0);
+  assert.deepEqual(evaluatedKeys, ['n1::api-https', 'n1::peer']);
+  assert.equal('n1::harvesters' in written[0].targets, false);
+  assert.deepEqual(written[0].harvesters, {
+    n1: { accounts: ['AA'], observedAt: '2026-10-04T13:00:00.000Z' },
+  });
+});
+
+test('harvesters の対象が混ざっていても、例外を投げた検査は正しい対象に紐づく', async () => {
+  const { written, overrides } = deps({
+    // harvesters を先頭に置き、設定上の並びと死活監視の対象の並びで添字がずれる状況を作る
+    loadConfig: async () => [HARVESTER_TARGET, ...TARGETS],
+    checkPeer: async () => { throw new Error('想定外の例外'); },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written[0].targets['n1::peer'].consecutiveFailures, 1);
+  assert.equal(written[0].targets['n1::api-https'].consecutiveFailures, 0);
+  assert.equal('n1::harvesters' in written[0].targets, false);
+});
+
+test('harvester が増えたら通知し、state に新しい一覧を残す', async () => {
+  let sent = null;
+  const { written, overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({ n1: { accounts: ['AA'], observedAt: '2026-10-04T12:00:00.000Z' } }),
+    checkHarvesters: harvested(['AA', 'BB']),
+    dispatch: async (events) => { sent = events; return { channels: 1, delivered: 1 }; },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].type, 'harvesters');
+  assert.deepEqual(sent[0].added, ['BB']);
+  assert.deepEqual(written[0].harvesters.n1.accounts, ['AA', 'BB']);
+});
+
+test('api が異常なノードでは harvester を比較せず、前回の一覧を残す', async () => {
+  let sent = [];
+  const { written, overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({ n1: { accounts: ['AA', 'BB'], observedAt: '2026-10-04T12:00:00.000Z' } }),
+    checkApi: async (target) => ({ key: target.key, node: target.node, label: target.label, ok: false, reason: 'health-down', detail: 'ng', height: null }),
+    // ノードの不調で空の一覧が返ってきた状況
+    checkHarvesters: harvested([]),
+    dispatch: async (events) => { sent = events; return { channels: 1, delivered: 1 }; },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.deepEqual(sent.filter((e) => e.type === 'harvesters'), []);
+  assert.deepEqual(written[0].harvesters.n1, { accounts: ['AA', 'BB'], observedAt: '2026-10-04T12:00:00.000Z' });
+});
+
+test('harvester の取得が例外を投げても、他の検査と state の更新を巻き込まない', async () => {
+  const { written, overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({ n1: { accounts: ['AA'], observedAt: '2026-10-04T12:00:00.000Z' } }),
+    checkHarvesters: async () => { throw new Error('想定外の例外'); },
+  });
+  assert.equal(await main(overrides), 0);
+  assert.equal(written[0].targets['n1::api-https'].status, 'up');
+  assert.deepEqual(written[0].harvesters.n1, { accounts: ['AA'], observedAt: '2026-10-04T12:00:00.000Z' });
+});
+
+test('週次サマリに今回確認した harvester の件数が載る', async () => {
+  let sent = null;
+  const { overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({}, { lastWeeklySummaryAt: null }),
+    checkHarvesters: harvested(['AA', 'BB']),
+    dispatch: async (events) => { sent = events; return { channels: 1, delivered: 1 }; },
+  });
+  assert.equal(await main(overrides), 0);
+  const summary = sent.find((e) => e.type === 'summary');
+  assert.deepEqual(summary.harvesters, [{ node: 'n1', count: 2, observedAt: '2026-10-04T13:00:00.000Z' }]);
+});
+
+test('harvester の変化を 1 件も届けられなければ state を更新せず次回に持ち越す', async () => {
+  const { written, overrides } = deps({
+    loadConfig: async () => [...TARGETS, HARVESTER_TARGET],
+    readState: withHarvesters({ n1: { accounts: ['AA'], observedAt: '2026-10-04T12:00:00.000Z' } }),
+    checkHarvesters: harvested(['AA', 'BB']),
+    dispatch: async () => ({ channels: 1, delivered: 0 }),
+  });
+  assert.equal(await main(overrides), 1);
+  assert.equal(written.length, 0);
 });
