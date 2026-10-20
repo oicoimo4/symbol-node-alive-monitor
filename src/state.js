@@ -14,7 +14,7 @@ export const INITIAL_TARGET_STATE = Object.freeze({
 });
 
 export function createInitialState() {
-  return { version: CURRENT_VERSION, updatedAt: null, lastWeeklySummaryAt: null, targets: {} };
+  return { version: CURRENT_VERSION, updatedAt: null, lastWeeklySummaryAt: null, targets: {}, harvesters: {} };
 }
 
 /**
@@ -40,7 +40,26 @@ export function normalizeState(raw) {
     updatedAt: raw.updatedAt ?? null,
     lastWeeklySummaryAt: raw.lastWeeklySummaryAt ?? null,
     targets,
+    harvesters: normalizeHarvesters(raw.harvesters),
   };
+}
+
+/**
+ * harvester の記録を正規化する。harvester 監視を入れる前の state には無いので {} を補う。
+ * 壊れたエントリは捨てて「前回の記録なし」に戻す。残すと誤った差分で誤報になるが、
+ * 記録なしなら次回は初回観測として黙って記録し直されるだけで済む。
+ */
+function normalizeHarvesters(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+
+  const records = [];
+  for (const [node, entry] of Object.entries(raw)) {
+    const accounts = entry?.accounts;
+    if (!Array.isArray(accounts) || !accounts.every((account) => typeof account === 'string')) continue;
+    records.push([node, { accounts: [...accounts], observedAt: entry.observedAt ?? null }]);
+  }
+  // ノード名は自由な文字列なので、{} への代入だと __proto__ が prototype の差し替えになり記録が消える。
+  return Object.fromEntries(records);
 }
 
 export async function readState(path, { logger = console } = {}) {

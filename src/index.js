@@ -4,6 +4,8 @@ import { readState as defaultReadState, writeState as defaultWriteState } from '
 import { evaluate as defaultEvaluate } from './evaluate.js';
 import { checkApi as defaultCheckApi } from './checks/api.js';
 import { checkPeer as defaultCheckPeer } from './checks/peer.js';
+import { checkHarvesters as defaultCheckHarvesters } from './checks/harvesters.js';
+import { annotateSummary, evaluateHarvesters, gateByApiHealth } from './harvesters.js';
 import { dispatch as defaultDispatch } from './notify/index.js';
 
 /**
@@ -44,6 +46,7 @@ export async function main(overrides = {}) {
     evaluate = defaultEvaluate,
     checkApi = defaultCheckApi,
     checkPeer = defaultCheckPeer,
+    checkHarvesters = defaultCheckHarvesters,
     dispatch = defaultDispatch,
     now = () => new Date(),
     logger = console,
@@ -79,22 +82,50 @@ export async function main(overrides = {}) {
   const prevState = await readState(statePath, { logger });
   const startedAt = now();
 
-  const settled = await Promise.allSettled(
-    targets.map((target) =>
-      (target.kind === 'api'
-        ? checkApi(target, { lastHeight: comparableHeight(prevState.targets[target.key], startedAt) })
-        : checkPeer(target))),
-  );
+  // harvester は障害の監視対象ではない。evaluate に渡すと targets にエントリが作られ、
+  // DOWN 判定の対象になってしまうため、ここで振り分けて別の経路で扱う。
+  const liveness = targets.filter((target) => target.kind !== 'harvesters');
+  const harvesterTargets = targets.filter((target) => target.kind === 'harvesters');
+
+  const [settled, harvesterSettled] = await Promise.all([
+    Promise.allSettled(
+      liveness.map((target) =>
+        (target.kind === 'api'
+          ? checkApi(target, { lastHeight: comparableHeight(prevState.targets[target.key], startedAt) })
+          : checkPeer(target))),
+    ),
+    Promise.allSettled(harvesterTargets.map((target) => checkHarvesters(target))),
+  ]);
 
   // 1件の検査が予期せず例外を投げても、他の対象の結果と state 更新を道連れにしない。
   // Promise.all だと fail-fast で全滅し、壊れた state が残り続けて監視が永久に死ぬ。
+  // 添字は振り分け後の配列のものなので、targets ではなく liveness / harvesterTargets を引くこと。
   const results = settled.map((outcome, index) =>
-    (outcome.status === 'fulfilled' ? outcome.value : crashedResult(targets[index], outcome.reason)));
+    (outcome.status === 'fulfilled' ? outcome.value : crashedResult(liveness[index], outcome.reason)));
+  const observations = harvesterSettled.map((outcome, index) =>
+    (outcome.status === 'fulfilled'
+      ? outcome.value
+      : crashedObservation(harvesterTargets[index], outcome.reason)));
 
-  const { nextState, events } = evaluate({ prevState, results, now: startedAt });
+  const { nextState: livenessState, events: livenessEvents } = evaluate({ prevState, results, now: startedAt });
+  const { nextHarvesters, events: harvesterEvents } = evaluateHarvesters({
+    prevHarvesters: prevState.harvesters ?? {},
+    observations: gateByApiHealth(observations, results),
+    now: startedAt,
+  });
+
+  // evaluate は harvester を知らないので、state とサマリにはここで合流させる。
+  const nextState = { ...livenessState, harvesters: nextHarvesters };
+  const harvesterNodes = harvesterTargets.map((target) => target.node);
+  const events = [...annotateSummary(livenessEvents, nextHarvesters, harvesterNodes), ...harvesterEvents];
 
   const downCount = results.filter((r) => !r.ok).length;
   logger.log(`監視対象 ${results.length} 件を検査しました（異常 ${downCount} 件、通知 ${events.length} 件）`);
+  for (const observation of observations) {
+    if (!observation.ok) {
+      logger.warn(`harvester の一覧を取得できませんでした (${observation.node}): ${observation.detail}`);
+    }
+  }
 
   if (dryRun) {
     logger.warn(`DRY_RUN: ${events.length} 件のイベントを送信せず、state も保存しません`);
@@ -137,6 +168,22 @@ function crashedResult(target, error) {
     reason: 'bad-response',
     detail: `検査が例外で失敗しました: ${error?.message ?? error}`,
     height: null,
+  };
+}
+
+/**
+ * harvester の取得そのものが例外で落ちたときの合成結果。
+ * 失敗した観測として扱い、前回の一覧を保持させる（比較して誤報を出さないため）。
+ */
+function crashedObservation(target, error) {
+  return {
+    key: target.key,
+    node: target.node,
+    label: target.label,
+    ok: false,
+    reason: 'bad-response',
+    detail: `検査が例外で失敗しました: ${error?.message ?? error}`,
+    accounts: null,
   };
 }
 

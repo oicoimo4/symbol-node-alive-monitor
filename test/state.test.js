@@ -15,7 +15,7 @@ test('createInitialState は毎回新しいオブジェクトを返す', () => {
   const a = createInitialState();
   const b = createInitialState();
   assert.notEqual(a, b);
-  assert.deepEqual(a, { version: 1, updatedAt: null, lastWeeklySummaryAt: null, targets: {} });
+  assert.deepEqual(a, { version: 1, updatedAt: null, lastWeeklySummaryAt: null, targets: {}, harvesters: {} });
 });
 
 test('INITIAL_TARGET_STATE は凍結されている', () => {
@@ -53,6 +53,9 @@ test('正しい state はそのまま保持される', () => {
         incidentsThisWeek: 2,
       },
     },
+    harvesters: {
+      n1: { accounts: ['AA', 'BB'], observedAt: '2026-10-04T13:00:00.000Z' },
+    },
   };
   assert.deepEqual(normalizeState(raw), raw);
 });
@@ -66,6 +69,43 @@ test('target の欠けたフィールドは初期値で補われる', () => {
     ...INITIAL_TARGET_STATE,
     consecutiveFailures: 5,
   });
+});
+
+test('harvesters が無い state には空オブジェクトが補われる', () => {
+  // harvester 監視を入れる前に保存された state。version は同じ 1 のまま読めること
+  const normalized = normalizeState({ version: 1, targets: {} });
+  assert.deepEqual(normalized.harvesters, {});
+});
+
+test('壊れた harvester エントリは捨てられる', () => {
+  // accounts が文字列のまま残ると 1 文字ずつの集合として比較され、全員入れ替わりの誤報になる
+  const normalized = normalizeState({
+    version: 1,
+    targets: {},
+    harvesters: {
+      text: { accounts: 'AABB', observedAt: '2026-10-04T13:00:00.000Z' },
+      numbers: { accounts: [1, 2], observedAt: '2026-10-04T13:00:00.000Z' },
+      empty: null,
+      good: { accounts: ['AA'] },
+    },
+  });
+  assert.deepEqual(normalized.harvesters, { good: { accounts: ['AA'], observedAt: null } });
+});
+
+test('harvesters がオブジェクトでなければ空として扱う', () => {
+  for (const bad of ['oops', 42, ['AA']]) {
+    const normalized = normalizeState({ version: 1, targets: {}, harvesters: bad });
+    assert.deepEqual(normalized.harvesters, {}, `harvesters: ${JSON.stringify(bad)}`);
+  }
+});
+
+test('__proto__ という名前のノードの記録も保持される', () => {
+  // JSON.parse は __proto__ を自分自身のキーとして作る。{} への代入で写すと prototype の差し替えになり記録が消える
+  const normalized = normalizeState(JSON.parse(
+    '{"version":1,"targets":{},"harvesters":{"__proto__":{"accounts":["AA"],"observedAt":"2026-10-04T13:00:00.000Z"}}}',
+  ));
+  assert.equal(Object.hasOwn(normalized.harvesters, '__proto__'), true);
+  assert.deepEqual(normalized.harvesters['__proto__'].accounts, ['AA']);
 });
 
 /** 警告を捕捉するロガー。テスト出力を汚さないために使う。 */
@@ -127,6 +167,7 @@ test('writeState で書いたものを readState で読み戻せる', async () =
     updatedAt: '2026-10-04T13:00:00.000Z',
     lastWeeklySummaryAt: null,
     targets: { 'n1::peer': { ...INITIAL_TARGET_STATE, consecutiveFailures: 1 } },
+    harvesters: { n1: { accounts: ['AA'], observedAt: '2026-10-04T13:00:00.000Z' } },
   };
   await writeState(path, state);
   assert.deepEqual(await readState(path), state);

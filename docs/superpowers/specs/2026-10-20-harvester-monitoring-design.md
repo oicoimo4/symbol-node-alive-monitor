@@ -244,7 +244,7 @@ evaluateHarvesters({ prevHarvesters, observations, now }) -> { nextHarvesters, e
 🌾 oimonode_ex_on_Contabo — harvester 6 件
 ```
 
-観測記録が 1 件も無い場合はこの節自体を出さない。
+`harvesters: true` のノードが 1 つも無い場合はこの節自体を出さない。一覧を一度も取得できていないノードは `🌾 {node} — harvester 未取得` と出す（設定したのに監視できていない状態を無言にしないため）。
 
 ## 13. テスト方針
 

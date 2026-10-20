@@ -277,8 +277,10 @@ Actions タブ → `node-alive-monitor` → 右上の `⋯` → Disable workflow
 | `nodes[].api.http` | | 整数 | REST の http ポート（通常 3000） |
 | `nodes[].api.https` | | 整数 | REST の https ポート（通常 3001） |
 | `nodes[].peer.port` | | 整数 | Peer ポート（通常 7900） |
+| `nodes[].harvesters` | | 真偽値 | `true` で、このノードに委任されている harvester の増減を通知する（既定 `false`） |
 
 - `api` と `peer` は**少なくとも一方**が必要。書いたものだけが検査される。
+- `harvesters: true` には `api` の http か https が必要（一覧を REST から取得するため）。詳しくは[harvester の増減](#harvester-の増減)。
 - ポート番号は 1〜65535 の整数。
 - 設定が不正な場合、監視は実行されず終了コード 1 で止まる（無言で誤動作するより止める設計）。
 
@@ -327,6 +329,7 @@ Actions タブ → `node-alive-monitor` → 右上の `⋯` → Disable workflow
 | 🔴 DOWN | 2 回連続で検査に失敗したとき（1 回だけ） | 赤 |
 | 🟢 復旧 | DOWN 通知済みの対象が正常に戻ったとき | 緑 |
 | 📊 週次サマリ | 前回サマリから 7 日経過したとき、および初回実行時 | 青 |
+| 🌾 Harvester 変化 | `harvesters: true` のノードで、委任されている harvester が増減したとき | 琥珀 |
 
 `api.http` と `api.https` を両方設定しているノードは、2 つの独立した監視対象として扱われる。
 そのため、チェーン停止のような単一の原因でも DOWN 通知が 2 件届く。これは意図した挙動である。
@@ -345,6 +348,33 @@ Actions タブ → `node-alive-monitor` → 右上の `⋯` → Disable workflow
 | `health-down` | `/node/health` が異常を返した | API ノードまたは MongoDB の不調 |
 | `chain-stalled` | チェーン高が進んでいない | 同期停止、ピア接続喪失 |
 | `bad-response` | 応答が解釈できない | 別のサービスが同じポートを使っている、プロキシの誤設定 |
+
+### harvester の増減
+
+ノードに `"harvesters": true` を書くと、そのノードに委任されている harvester
+（delegated harvesting でアンロック済みのアカウント）の増減を通知する。
+委任が外れてもノードは正常に動き続けるため、死活監視だけでは気づけない。
+
+```
+🌾 Harvester 変化: my-node-01
+
+6 → 7 件
+
+参加: 9D4B2C01A7F3…
+
+確認時刻: 2026-10-20T14:00:00.000Z
+```
+
+- 一覧は `/node/unlockedaccount` から取得する。https を優先し、無ければ http を使う。http と https の両方から
+  取ると二重計上になるため、1 ノードにつき 1 つの URL からだけ取得する
+- 公開鍵は先頭 12 文字だけを出す。アドレスへの変換はしない（外部依存が必要になるため）
+- **初回は記録するだけで通知しない**（比較対象が無いため）
+- **同じ実行で api 検査（http か https）が成功したときだけ比較する。** ノードが落ちている回は
+  前回の一覧をそのまま残すので、障害のたびに「全員離脱」の誤報が出ることはない
+- harvester の増減は障害ではないので、DOWN 判定や週次サマリの障害回数には影響しない
+- 週次サマリの対象一覧の後に、ノードごとの現在件数と最終確認時刻が載る。**最終確認時刻が古いままなら、
+  一覧を取得できない状態が続いている。** 一度も取得できていないノードは「未取得」と出る
+- 他人のノードを監視しているだけなら書かないこと（既定は `false`）
 
 ---
 
@@ -375,6 +405,12 @@ git show FETCH_HEAD:state.json
       "notified": false,
       "incidentsThisWeek": 0
     }
+  },
+  "harvesters": {
+    "my-node-01": {
+      "accounts": ["0A1B2C3D4E5F...", "9D4B2C01A7F3..."],
+      "observedAt": "2026-10-05T13:00:00.000Z"
+    }
   }
 }
 ```
@@ -388,6 +424,10 @@ git show FETCH_HEAD:state.json
 | `downSince` | 障害が始まった時刻。継続中は最初の失敗時刻で固定される |
 | `notified` | DOWN 通知を送信済みか。障害中の再通知を防ぐ |
 | `incidentsThisWeek` | 週次サマリ送信時にリセットされる障害回数 |
+
+`harvesters` のエントリは `harvesters: true` のノードにだけ作られる（該当ノードが無ければ `{}`）。`accounts` は前回確認できた
+harvester の公開鍵（ソート済み）、`observedAt` はそれを確認した時刻。ノードや api が落ちていて
+確認できなかった回は更新されない。設定から `harvesters` を外すと、次の実行でエントリが消える。
 
 ### リセットする
 
@@ -487,7 +527,7 @@ TLS 証明書の期限切れがほぼ確実。通知にもその旨が添えら�
 ### ローカルでの実行
 
 ```bash
-npm test                                     # テスト（ネットワークアクセスなし、110 件）
+npm test                                     # テスト（ネットワークアクセスなし、174 件）
 DRY_RUN=1 node src/index.js                  # 1 回だけ検査する（送信せず、state も保存しない）
 DISCORD_WEBHOOK_URL=... node src/index.js    # 通知ありで 1 回検査する
 ```
@@ -523,15 +563,17 @@ src/
   config.js           設定の読込・検証・監視対象への展開
   state.js            state.json の読み書きと正規化
   evaluate.js         判定ロジック（純粋関数）
+  harvesters.js       harvester 増減の判定（純粋関数）
   checks/retry.js     再試行と共有定数
   checks/api.js       API ノードの検査
   checks/peer.js      Peer ノードの検査
+  checks/harvesters.js harvester 一覧の取得
   notify/format.js    通知先に依存しない文面
   notify/webhook.js   Webhook への POST
   notify/discord.js   Discord 用の整形
   notify/slack.js     Slack 用の整形
   notify/index.js     通知のディスパッチ
-test/                 node:test（103 件）
+test/                 node:test（174 件）
 ```
 
 `evaluate.js` は**副作用を持たない純粋関数**になっている（現在時刻すら引数で受け取る）。
@@ -543,6 +585,8 @@ test/                 node:test（103 件）
 
 - 設計書: `docs/superpowers/specs/2026-10-04-node-alive-monitoring-design.md`
 - 実装計画: `docs/superpowers/plans/2026-10-04-node-alive-monitoring.md`
+- harvester 増減監視の設計書: `docs/superpowers/specs/2026-10-20-harvester-monitoring-design.md`
+- harvester 増減監視の実装計画: `docs/superpowers/plans/2026-10-20-harvester-monitoring.md`
 
 ---
 

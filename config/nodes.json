@@ -4,13 +4,15 @@
       "name": "oimonode_on_Contabo",
       "host": "vmi2130738.contaboserver.net",
       "api": { "http": 3000, "https": 3001 },
-      "peer": { "port": 7900 }
+      "peer": { "port": 7900 },
+      "harvesters": true
     },
     {
       "name": "oimonode_ex_on_Contabo",
       "host": "vmi2627658.contaboserver.net",
       "api": { "http": 3000, "https": 3001 },
-      "peer": { "port": 7900 }
+      "peer": { "port": 7900 },
+      "harvesters": true
     }
   ]
 }
