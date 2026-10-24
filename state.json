@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-24T09:28:21.009Z",
+  "lastWeeklySummaryAt": "2026-10-23T19:19:50.002Z",
+  "targets": {
+    "oimonode_on_Contabo::api-http": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": "5891043",
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    },
+    "oimonode_on_Contabo::api-https": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": "5891043",
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    },
+    "oimonode_on_Contabo::peer": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": null,
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    },
+    "oimonode_ex_on_Contabo::api-http": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": "5891043",
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    },
+    "oimonode_ex_on_Contabo::api-https": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": "5891043",
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    },
+    "oimonode_ex_on_Contabo::peer": {
+      "status": "up",
+      "consecutiveFailures": 0,
+      "lastHeight": null,
+      "lastOkAt": "2026-10-24T09:28:21.009Z",
+      "downSince": null,
+      "notified": false,
+      "incidentsThisWeek": 0
+    }
+  },
+  "harvesters": {
+    "oimonode_on_Contabo": {
+      "accounts": [
+        "004766DDDBDECEA52A2BB674521845EA1C9F1149A96C8C6BF276F744119410A5",
+        "057F2B2DA8E61E00DFF078931900BA22D6998DBA400E33DDA9F40EDB45E00F9B",
+        "11A6688A19F8069E46DA7FFC72EB512EFE5BB05FE5D6E9ECB046EC5D96C42C22",
+        "A1FE061806EA7484F43ED2653B0F1DC4BD73917BFC1A6D3C190A98AD77A7805A",
+        "B017EE9F269F758F28B4132A306FA9B3A4EA3C64DD54048EDBE04EAAC1C0418E",
+        "FCD93AE2C28FF6EF25B142CD05E728616A64CB3B9D065A6438C4FDF214C86C87"
+      ],
+      "observedAt": "2026-10-24T09:28:21.009Z"
+    },
+    "oimonode_ex_on_Contabo": {
+      "accounts": [
+        "004766DDDBDECEA52A2BB674521845EA1C9F1149A96C8C6BF276F744119410A5",
+        "057F2B2DA8E61E00DFF078931900BA22D6998DBA400E33DDA9F40EDB45E00F9B",
+        "11A6688A19F8069E46DA7FFC72EB512EFE5BB05FE5D6E9ECB046EC5D96C42C22",
+        "A1FE061806EA7484F43ED2653B0F1DC4BD73917BFC1A6D3C190A98AD77A7805A",
+        "B017EE9F269F758F28B4132A306FA9B3A4EA3C64DD54048EDBE04EAAC1C0418E",
+        "FCD93AE2C28FF6EF25B142CD05E728616A64CB3B9D065A6438C4FDF214C86C87"
+      ],
+      "observedAt": "2026-10-24T09:28:21.009Z"
+    }
+  }
+}
